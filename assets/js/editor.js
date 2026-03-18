@@ -9,50 +9,36 @@
 (function ($) {
     'use strict';
 
-    /* =========================================================
-       ESTADO DE LA APLICACIÓN
-       Centraliza todos los datos de la sesión de edición.
-    ========================================================= */
+    // Estado global
     const estado = {
         flipbookId:    parseInt( flipbookAdmin.flipbook_id ) || 0,
         pdfUrl:        flipbookAdmin.pdf_url || '',
         totalPaginas:  parseInt( flipbookAdmin.pdf_paginas ) || 0,
         paginaActual:  1,
-        pdfDoc:        null,      // Instancia del documento PDF.js
-        overlays:      [],        // Array de todos los elementos posicionados
-        seleccionado:  null,      // tempId del overlay actualmente seleccionado
-        arrastrando:   false,     // Flag: el usuario está arrastrando un overlay
-        redimensionando: false,   // Flag: el usuario está redimensionando un overlay
+        pdfDoc:        null,
+        overlays:      [],
+        seleccionado:  null,
+        arrastrando:   false,
+        redimensionando: false,
         arrastre: { offsetX: 0, offsetY: 0 },
         resize: { startX: 0, startY: 0, startW: 0, startH: 0 },
     };
 
-    // Color Solicitado
     const COLOR_AUDIO = '#C70000';
-
-    // Contador para generar IDs temporales únicos antes de guardar en BD
     let contadorTemp = 1;
 
-    /* =========================================================
-       INICIALIZACIÓN
-    ========================================================= */
+    // Inicialización
     $( document ).ready( function () {
         construirEditor();
-
-        // Si ya hay un PDF cargado (modo edición), mostrarlo
         if ( estado.pdfUrl && estado.totalPaginas > 0 ) {
             cargarPDF( estado.pdfUrl );
         }
-
-        // Si es un flipbook existente, cargar sus overlays desde el servidor
         if ( estado.flipbookId ) {
             cargarOverlays();
         }
     });
 
-    /* =========================================================
-       Todo el HTML se genera aquí y se inserta en #flipbook-cargando.
-    ========================================================= */
+    // Construir interfaz
     function construirEditor() {
         const html = `
         <div id="editor-app">
@@ -315,9 +301,7 @@
         vincularEventos();
     }
 
-    /* =========================================================
-       VINCULACIÓN DE EVENTOS
-    ========================================================= */
+    // Vincular eventos
     function vincularEventos() {
 
         // Subida de PDF
@@ -393,14 +377,8 @@
         configurarArrastrable( '#zona-audio', '#archivo-audio' );
     }
 
-    /* =========================================================
-       CARGA Y RENDERIZADO DEL PDF
-    ========================================================= */
-
-    /**
-     * Envía el archivo PDF al servidor para comprimirlo y guardarlo.
-     */
-    function subirPDF( archivo ) {
+    // PDF.js y renderizado
+    function cargarPDF( url ) {
         const fd = new FormData();
         fd.append( 'action',       'flipbook_subir_pdf' );
         fd.append( 'nonce',        flipbookAdmin.nonce );
@@ -440,9 +418,7 @@
         });
     }
 
-    /**
-     * Inicializa PDF.js y carga el documento desde la URL dada.
-     */
+    // Cargar PDF desde URL
     function cargarPDF( url ) {
         pdfjsLib.GlobalWorkerOptions.workerSrc =
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -456,9 +432,7 @@
         });
     }
 
-    /**
-     * Renderiza la página indicada del PDF en el canvas.
-     */
+    // Renderizar página del PDF en canvas
     function renderizarPagina( num ) {
         if ( ! estado.pdfDoc ) return;
 
@@ -491,10 +465,7 @@
         renderizarPagina( n );
     }
 
-    /* =========================================================
-       SISTEMA DE OVERLAYS
-    ========================================================= */
-
+    // Overlays
     function renderizarOverlays() {
         const capa = $( '#capa-overlays' );
         const contenedor = document.getElementById( 'contenedor-pagina' );
@@ -517,10 +488,7 @@
         vincularEventosOverlay();
     }
 
-    /**
-     * Construye el elemento DOM de un overlay según su tipo.
-     * Convierte coordenadas porcentuales a píxeles.
-     */
+    // Construir elemento overlay
     function construirElementoOverlay( ov, W, H ) {
         const left   = ( ov.left  / 100 ) * W;
         const top    = ( ov.top   / 100 ) * H;
@@ -529,7 +497,6 @@
 
         const estaSeleccionado = estado.seleccionado === ov.tempId;
 
-        // Contenido interno según el tipo de overlay
         let contenidoInterno = '';
         switch ( ov.tipo ) {
             case 'youtube':
@@ -543,7 +510,6 @@
                 contenidoInterno = `<div class="overlay-icono overlay-slide">📽</div>`;
                 break;
             case 'audio':
-                // Botón rojo con ícono SVG de altavoz (color #C70000)
                 contenidoInterno = `
                     <div class="overlay-audio" style="background:${COLOR_AUDIO};">
                         <svg viewBox="0 0 24 24" fill="white" width="50%" height="50%">
@@ -553,13 +519,11 @@
                 break;
         }
 
-        // Construir el elemento contenedor del overlay
         const el = $(`
             <div class="overlay${estaSeleccionado ? ' overlay-seleccionado' : ''}"
                  data-tempid="${ov.tempId}"
                  style="left:${left}px; top:${top}px; width:${ancho}px; height:${alto}px;">
                 ${contenidoInterno}
-                <!-- Handle en la esquina inferior derecha para redimensionar -->
                 <div class="handle-resize"></div>
             </div>
         `);
@@ -567,9 +531,9 @@
         return el;
     }
 
+    // Eventos de overlays
     function vincularEventosOverlay() {
-
-        // Evento de arrastre del overlay completo
+        // Arrastrar overlay
         $( '.overlay' ).on( 'mousedown', function ( e ) {
             if ( $( e.target ).hasClass( 'handle-resize' ) ) return;
             e.preventDefault();
@@ -675,9 +639,7 @@
         });
     }
 
-    /**
-     * Marca un overlay como seleccionado y muestra el panel de posición.
-     */
+    // Seleccionar overlay en canvas
     function seleccionarOverlay( tempId ) {
         estado.seleccionado = tempId;
         $( '.overlay' ).removeClass( 'overlay-seleccionado' );
@@ -688,9 +650,7 @@
         $( '#panel-posicion' ).show();
     }
 
-    /**
-     * Rellena los inputs del panel de posición con las coordenadas del overlay.
-     */
+    // Actualizar inputs del panel de posición
     function actualizarPanelPosicion( ov ) {
         $( '#pos-left'  ).val( redondear2( ov.left ) );
         $( '#pos-top'   ).val( redondear2( ov.top ) );
@@ -698,9 +658,7 @@
         $( '#pos-alto'  ).val( redondear2( ov.alto ) );
     }
 
-    /**
-     * Actualiza el estado del overlay cuando el usuario edita los inputs numéricos.
-     */
+    // Actualizar overlay desde inputs numéricos
     function actualizarDesdeInputs() {
         if ( ! estado.seleccionado ) return;
         const ov = obtenerOverlay( estado.seleccionado );
@@ -715,9 +673,7 @@
         renderizarOverlays();
     }
 
-    /**
-     * Elimina el overlay seleccionado de la BD (si tiene id) y del estado.
-     */
+    // Eliminar overlay seleccionado
     function eliminarSeleccionado() {
         if ( ! estado.seleccionado ) return;
         const ov = obtenerOverlay( estado.seleccionado );
@@ -739,10 +695,7 @@
         renderizarOverlays();
     }
 
-    /* =========================================================
-       GESTIÓN DE MODALES
-    ========================================================= */
-
+    // Modales
     function abrirModal( tipo ) {
         cerrarTodosLosModales();
         $( '#fondo-modal' ).show();
@@ -765,9 +718,7 @@
         $( '#miniaturas-slides' ).empty();
     }
 
-    /**
-     * Procesa una imagen arrastrada directamente (drag & drop)
-     */
+    // Procesar imagen arrastrada (drag & drop)
     function procesarImagenArrastrada( archivo ) {
         if ( ! archivo ) {
             alert( 'Por favor, selecciona una imagen.' );
@@ -816,9 +767,7 @@
         });
     }
 
-    /**
-     * Procesa un audio arrastrado directamente (drag & drop)
-     */
+    // Procesar audio arrastrado (drag & drop)
     function procesarAudioArrastrado( archivo ) {
         if ( ! archivo ) {
             alert( 'Por favor, selecciona un archivo de audio.' );
@@ -867,9 +816,7 @@
         });
     }
 
-    /**
-     * Procesa múltiples imágenes arrastradas directamente (para slides)
-     */
+    // Procesar múltiples imágenes arrastradas (slides)
     function procesarSlidesArrastrados( archivos ) {
         if ( ! archivos || archivos.length === 0 ) {
             alert( 'Por favor, selecciona al menos una imagen.' );
@@ -949,11 +896,7 @@
         });
     }
 
-    /**
-     * Configura el drag & drop en una zona de arrastre.
-     * @param {string} selectoreZona - Selector de la zona (ej: '#zona-imagen')
-     * @param {string} selectorInput - Selector del input file asociado (ej: '#archivo-imagen')
-     */
+    // Configurar drag & drop en zona de arrastre
     function configurarArrastrable( selectoreZona, selectorInput ) {
         const $zona = $( selectoreZona );
         const $input = $( selectorInput );
@@ -1035,10 +978,7 @@
         });
     }
 
-    /* =========================================================
-       CONFIRMACIONES DE CADA MODAL
-    ========================================================= */
-
+    // Confirmaciones de modales
     function confirmarYoutube() {
         const url = $( '#yt-url' ).val().trim();
         if ( ! url ) { alert( 'Ingresa una URL de YouTube.' ); return; }
@@ -1253,13 +1193,8 @@
         });
     }
 
-    /* =========================================================
-       GESTIÓN DEL ARRAY DE OVERLAYS
-    ========================================================= */
-
-    /**
-     * Agrega un nuevo overlay al estado y lo renderiza en el canvas.
-     */
+    // Gestionar overlays
+    // Agregar nuevo overlay
     function agregarOverlay( tipo, datos, left, top, ancho, alto ) {
         const ov = {
             tempId: 'temp_' + ( contadorTemp++ ),
@@ -1274,21 +1209,13 @@
         seleccionarOverlay( ov.tempId );
     }
 
-    /**
-     * Busca un overlay en el estado por su tempId.
-     */
+    // Buscar overlay por tempId
     function obtenerOverlay( tempId ) {
         return estado.overlays.find( o => o.tempId === tempId );
     }
 
-    /* =========================================================
-       CARGA Y GUARDADO EN SERVIDOR
-    ========================================================= */
-
-    /**
-     * Carga los overlays del flipbook desde la base de datos.
-     * Reemplaza el estado local con los datos del servidor.
-     */
+    // Servidor
+    // Cargar overlays desde BD
     function cargarOverlays() {
         $.post( flipbookAdmin.ajax_url, {
             action:      'flipbook_obtener_overlays',
@@ -1312,10 +1239,7 @@
         });
     }
 
-    /**
-     * Serializa todos los overlays y los envía al servidor para persistirlos.
-     * Tras guardar, recarga los overlays para sincronizar los IDs reales de la BD.
-     */
+    // Guardar todos los overlays en servidor
     function guardarTodo() {
         if ( ! estado.flipbookId ) {
             alert( 'Primero carga un PDF para crear el flipbook.' );
@@ -1348,14 +1272,8 @@
         });
     }
 
-    /* =========================================================
-       UTILIDADES
-    ========================================================= */
-
-    /**
-     * Extrae el ID de video de una URL de YouTube en cualquier formato.
-     * Soporta: youtu.be/ID, watch?v=ID, embed/ID, shorts/ID y solo el ID.
-     */
+    // Utilidades
+    // Extraer ID de YouTube
     function extraerIdYoutube( url ) {
         const regex = /(?:youtu\.be\/|v=|\/v\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/;
         const coincidencia = url.match( regex );
@@ -1365,9 +1283,7 @@
         return null;
     }
 
-    /**
-     * Convierte un tiempo en formato MM:SS a segundos.
-     */
+    // Convertir tiempo MM:SS a segundos
     function tiempoASegundos( t ) {
         if ( ! t ) return 0;
         const partes = t.split( ':' ).map( Number );
@@ -1375,9 +1291,7 @@
         return parseInt( t ) || 0;
     }
 
-    /**
-     * Muestra miniaturas de los archivos seleccionados para el slideshow.
-     */
+    // Vista previa de imágenes para slideshow
     function previsualizarSlides( archivos ) {
         const contenedor = $( '#miniaturas-slides' ).empty();
         const max = Math.min( archivos.length, 10 );
@@ -1392,9 +1306,7 @@
         }
     }
 
-    /**
-     * Muestra una notificación temporal en la parte superior del editor.
-     */
+    // Notificación temporal en la barra superior
     function mostrarNotificacion( mensaje, tipo ) {
         const clase   = tipo === 'exito' ? 'notice-success' : 'notice-error';
         const notif   = $( `<div class="notice ${clase} is-dismissible"><p>${mensaje}</p></div>` );
@@ -1402,12 +1314,12 @@
         setTimeout( () => notif.fadeOut( 300, () => notif.remove() ), 3500 );
     }
 
-    /** Redondea a 2 decimales. */
+    // Redondear a 2 decimales
     function redondear2( n ) {
         return Math.round( n * 100 ) / 100;
     }
 
-    /** Escapa caracteres especiales HTML. */
+    // Escapar caracteres HTML
     function escaparHtml( s ) {
         return String( s )
             .replace( /&/g,  '&amp;'  )
