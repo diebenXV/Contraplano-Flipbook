@@ -1,0 +1,1035 @@
+/**
+ * editor.js — Editor visual de Flipbook (panel de administración)
+ *
+ * Gestiona toda la interfaz del editor: construcción del HTML,
+ * carga del PDF con PDF.js, drag & drop de overlays, modales
+ * de inserción y comunicación AJAX con el servidor.
+ */
+
+(function ($) {
+    'use strict';
+
+    /* =========================================================
+       ESTADO DE LA APLICACIÓN
+       Centraliza todos los datos de la sesión de edición.
+    ========================================================= */
+    const estado = {
+        flipbookId:    parseInt( flipbookAdmin.flipbook_id ) || 0,
+        pdfUrl:        flipbookAdmin.pdf_url || '',
+        totalPaginas:  parseInt( flipbookAdmin.pdf_paginas ) || 0,
+        paginaActual:  1,
+        pdfDoc:        null,      // Instancia del documento PDF.js
+        overlays:      [],        // Array de todos los elementos posicionados
+        seleccionado:  null,      // tempId del overlay actualmente seleccionado
+        arrastrando:   false,     // Flag: el usuario está arrastrando un overlay
+        redimensionando: false,   // Flag: el usuario está redimensionando un overlay
+        arrastre: { offsetX: 0, offsetY: 0 },
+        resize: { startX: 0, startY: 0, startW: 0, startH: 0 },
+    };
+
+    // Color Solicitado
+    const COLOR_AUDIO = '#C70000';
+
+    // Contador para generar IDs temporales únicos antes de guardar en BD
+    let contadorTemp = 1;
+
+    /* =========================================================
+       INICIALIZACIÓN
+    ========================================================= */
+    $( document ).ready( function () {
+        construirEditor();
+
+        // Si ya hay un PDF cargado (modo edición), mostrarlo
+        if ( estado.pdfUrl && estado.totalPaginas > 0 ) {
+            cargarPDF( estado.pdfUrl );
+        }
+
+        // Si es un flipbook existente, cargar sus overlays desde el servidor
+        if ( estado.flipbookId ) {
+            cargarOverlays();
+        }
+    });
+
+    /* =========================================================
+       Todo el HTML se genera aquí y se inserta en #flipbook-cargando.
+    ========================================================= */
+    function construirEditor() {
+        const html = `
+        <div id="editor-app">
+
+            <!-- BARRA SUPERIOR: título, cargador de PDF y botón guardar -->
+            <div class="barra-superior">
+                <div class="barra-izquierda">
+                    <label>Título:</label>
+                    <input type="text" id="input-titulo"
+                           value="${escaparHtml( flipbookAdmin.titulo )}"
+                           placeholder="Nombre del flipbook" />
+                </div>
+                <div class="barra-centro">
+                    <label class="label-subir-pdf">
+                        <span>📄 Cargar PDF</span>
+                        <input type="file" id="input-pdf" accept=".pdf" />
+                    </label>
+                    <span id="info-pdf"></span>
+                </div>
+                <div class="barra-derecha">
+                    <button id="btn-guardar" class="btn-primario">💾 Guardar cambios</button>
+                </div>
+            </div>
+
+            <!-- ÁREA PRINCIPAL: sidebar de herramientas + canvas del PDF -->
+            <div class="area-principal">
+
+                <!-- SIDEBAR IZQUIERDO: herramientas y controles -->
+                <div class="sidebar">
+
+                    <div class="sidebar-titulo">Insertar elemento</div>
+
+                    <!-- Botones de herramientas multimedia -->
+                    <button class="btn-herramienta" data-tipo="youtube">
+                        <span class="icono-herramienta">▶</span>
+                        Insertar video de YouTube
+                    </button>
+                    <button class="btn-herramienta" data-tipo="imagen">
+                        <span class="icono-herramienta">🖼</span>
+                        Insertar imagen
+                    </button>
+                    <button class="btn-herramienta" data-tipo="presentacion">
+                        <span class="icono-herramienta">📽</span>
+                        Insertar presentación
+                    </button>
+                    <button class="btn-herramienta" data-tipo="audio">
+                        <span class="icono-herramienta" style="color:${COLOR_AUDIO}">🔊</span>
+                        Insertar sonido
+                    </button>
+
+                    <div class="separador"></div>
+                    <div class="sidebar-titulo">Página</div>
+
+                    <!-- Navegación entre páginas del PDF -->
+                    <div class="nav-paginas">
+                        <button id="btn-anterior">‹</button>
+                        <span>
+                            <input type="number" id="input-pagina" min="1" value="1" />
+                            / <span id="total-paginas">0</span>
+                        </span>
+                        <button id="btn-siguiente">›</button>
+                    </div>
+
+                    <!-- Panel de posición y tamaño (visible al seleccionar un overlay) -->
+                    <div id="panel-posicion" style="display:none;">
+                        <div class="sidebar-titulo">Posición y tamaño</div>
+                        <div class="grilla-posicion">
+                            <div class="campo-posicion">
+                                <label>Izquierda:</label>
+                                <div class="input-porcentaje">
+                                    <input type="number" id="pos-left" step="0.1" />
+                                    <span>%</span>
+                                </div>
+                            </div>
+                            <div class="campo-posicion">
+                                <label>Parte superior:</label>
+                                <div class="input-porcentaje">
+                                    <input type="number" id="pos-top" step="0.1" />
+                                    <span>%</span>
+                                </div>
+                            </div>
+                            <div class="campo-posicion">
+                                <label>Ancho:</label>
+                                <div class="input-porcentaje">
+                                    <input type="number" id="pos-ancho" step="0.1" />
+                                    <span>%</span>
+                                </div>
+                            </div>
+                            <div class="campo-posicion">
+                                <label>Altura:</label>
+                                <div class="input-porcentaje">
+                                    <input type="number" id="pos-alto" step="0.1" />
+                                    <span>%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button id="btn-eliminar" class="btn-peligro">🗑 Eliminar elemento</button>
+                    </div>
+
+                </div>
+
+                <!-- ÁREA DEL CANVAS: donde se renderiza el PDF y se posicionan los overlays -->
+                <div class="area-canvas">
+                    <div id="contenedor-pagina">
+                        <canvas id="canvas-pdf"></canvas>
+                        <!-- Capa transparente sobre el PDF donde se dibujan los overlays -->
+                        <div id="capa-overlays"></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- FONDO OSCURO de los modales -->
+        <div id="fondo-modal" style="display:none;"></div>
+
+        <!-- MODAL: Insertar video de YouTube -->
+        <div id="modal-youtube" class="modal" style="display:none;">
+            <div class="modal-contenido">
+                <div class="modal-cabecera">
+                    <h3>Insertar video de Youtube</h3>
+                    <button class="cerrar-modal">✕</button>
+                </div>
+                <div class="modal-cuerpo">
+                    <label>URL de Youtube:</label>
+                    <input type="text" id="yt-url"
+                           placeholder="https://youtu.be/z1FaIXbVKZk o https://www.youtube.com/watch?v=z1FaIXbVKZk" />
+                    <small>Ejemplo: https://youtu.be/z1FaIXbVKZk, https://www.youtube.com/watch?v=z1FaIXbVKZk o z1FaIXbVKZk</small>
+
+                    <div class="grupo-checkboxes">
+                        <label><input type="checkbox" id="yt-controles" checked /> Mostrar controles</label>
+                        <label><input type="checkbox" id="yt-autoplay" /> Reproducción automática</label>
+                        <label><input type="checkbox" id="yt-silencio" /> Silenciado</label>
+                        <label><input type="checkbox" id="yt-loop" /> Loop</label>
+                    </div>
+
+                    <label>Comienza en:</label>
+                    <input type="text" id="yt-inicio" value="00:00" placeholder="00:00" />
+
+                    <div class="grupo-radio">
+                        <label><input type="radio" name="yt-modo" value="embed" checked /> Embed</label>
+                        <label><input type="radio" name="yt-modo" value="popup" /> Popup</label>
+                    </div>
+                </div>
+                <div class="modal-pie">
+                    <button class="btn-secundario cerrar-modal">Cancelar</button>
+                    <button id="confirmar-youtube" class="btn-confirmar">De acuerdo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL: Insertar imagen -->
+        <div id="modal-imagen" class="modal" style="display:none;">
+            <div class="modal-contenido">
+                <div class="modal-cabecera">
+                    <h3>Insertar imagen</h3>
+                    <button class="cerrar-modal">✕</button>
+                </div>
+                <div class="modal-cuerpo">
+                    <div class="zona-arrastre" id="zona-imagen">
+                        <span>⬆ Selecciona o arrastra una imagen aquí</span>
+                        <input type="file" id="archivo-imagen" accept="image/*" />
+                    </div>
+                    <div id="vista-previa-imagen" style="display:none;">
+                        <img id="img-previa" src="" style="max-width:100%;max-height:200px;" />
+                    </div>
+                </div>
+                <div class="modal-pie">
+                    <button class="btn-secundario cerrar-modal">Cancelar</button>
+                    <button id="confirmar-imagen" class="btn-confirmar">De acuerdo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL: Insertar presentación de diapositivas -->
+        <div id="modal-presentacion" class="modal" style="display:none;">
+            <div class="modal-contenido">
+                <div class="modal-cabecera">
+                    <h3>Insertar presentación de diapositivas</h3>
+                    <button class="cerrar-modal">✕</button>
+                </div>
+                <div class="modal-cuerpo">
+                    <div class="zona-arrastre" id="zona-presentacion">
+                        <span>⬆ Selecciona un archivo de imagen. Tamaño máximo permitido: 10 MB.</span>
+                        <button id="btn-seleccionar-slides" class="btn-secundario" type="button">Seleccionar archivo</button>
+                        <input type="file" id="archivos-slides" accept="image/*" multiple style="display:none;" />
+                    </div>
+                    <div id="miniaturas-slides"></div>
+                    <small>Se pueden seleccionar como máximo 10 imágenes. La primera imagen establece la relación de aspecto.</small>
+
+                    <div class="separador"></div>
+                    <strong>Configuración de la presentación de diapositivas</strong>
+
+                    <div class="grupo-checkboxes">
+                        <label><input type="checkbox" id="slide-autoplay" checked /> Reproducción automática</label>
+                        <label><input type="checkbox" id="slide-loop" checked /> Loop</label>
+                        <label><input type="checkbox" id="slide-aleatorio" /> Aleatorio</label>
+                        <label><input type="checkbox" id="slide-flechas" /> Mostrar flechas de navegación</label>
+                    </div>
+
+                    <div class="dos-columnas">
+                        <div>
+                            <label>Tiempo de visualización de la imagen:</label>
+                            <select id="slide-duracion">
+                                <option value="1">1 segundo</option>
+                                <option value="2">2 segundo</option>
+                                <option value="3" selected>3 segundo</option>
+                                <option value="4">4 segundo</option>
+                                <option value="5">5 segundo</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Transición:</label>
+                            <select id="slide-transicion">
+                                <option value="slide" selected>Diapositiva</option>
+                                <option value="fade">Fundido</option>
+                                <option value="zoom">Zoom</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-pie">
+                    <button class="btn-secundario cerrar-modal">Cancelar</button>
+                    <button id="confirmar-presentacion" class="btn-confirmar">De acuerdo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL: Insertar sonido -->
+        <div id="modal-audio" class="modal" style="display:none;">
+            <div class="modal-contenido">
+                <div class="modal-cabecera">
+                    <h3>Insertar sonido</h3>
+                    <button class="cerrar-modal">✕</button>
+                </div>
+                <div class="modal-cuerpo">
+                    <!-- Toggle de reproducción automática -->
+                    <div class="fila-toggle-audio">
+                        <label>Autoplay</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="audio-autoplay" />
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="zona-arrastre" id="zona-audio">
+                        <span>⬆ Selecciona un archivo de audio (mp3, wav, ogg)</span>
+                        <input type="file" id="archivo-audio" accept="audio/*" />
+                    </div>
+                    <div id="nombre-audio" style="display:none;"></div>
+                </div>
+                <div class="modal-pie">
+                    <button class="btn-secundario cerrar-modal">Cancelar</button>
+                    <button id="confirmar-audio" class="btn-confirmar">De acuerdo</button>
+                </div>
+            </div>
+        </div>
+        `;
+
+        $( '#flipbook-cargando' ).replaceWith( html );
+        vincularEventos();
+    }
+
+    /* =========================================================
+       VINCULACIÓN DE EVENTOS
+    ========================================================= */
+    function vincularEventos() {
+
+        // Subida de PDF
+        $( '#input-pdf' ).on( 'change', function () {
+            const archivo = this.files[0];
+            if ( archivo ) subirPDF( archivo );
+        });
+
+        // Abrir modales al hacer clic en los botones de herramienta
+        $( document ).on( 'click', '.btn-herramienta', function () {
+            abrirModal( $( this ).data( 'tipo' ) );
+        });
+
+        // Cerrar modales
+        $( document ).on( 'click', '.cerrar-modal, #fondo-modal', cerrarTodosLosModales );
+
+        // Confirmaciones de cada modal
+        $( '#confirmar-youtube'      ).on( 'click', confirmarYoutube );
+        $( '#confirmar-imagen'       ).on( 'click', confirmarImagen );
+        $( '#confirmar-presentacion' ).on( 'click', confirmarPresentacion );
+        $( '#confirmar-audio'        ).on( 'click', confirmarAudio );
+
+        // Botón para abrir el selector de archivos de slides
+        $( '#btn-seleccionar-slides' ).on( 'click', () => $( '#archivos-slides' ).click() );
+        $( '#archivos-slides' ).on( 'change', function () {
+            previsualizarSlides( this.files );
+        });
+
+        // Vista previa de imagen seleccionada
+        $( '#archivo-imagen' ).on( 'change', function () {
+            const archivo = this.files[0];
+            if ( ! archivo ) return;
+            const lector = new FileReader();
+            lector.onload = e => {
+                $( '#img-previa' ).attr( 'src', e.target.result );
+                $( '#vista-previa-imagen' ).show();
+            };
+            lector.readAsDataURL( archivo );
+        });
+
+        // Mostrar nombre del audio seleccionado
+        $( '#archivo-audio' ).on( 'change', function () {
+            const archivo = this.files[0];
+            if ( archivo ) {
+                $( '#nombre-audio' ).text( 'Archivo: ' + archivo.name ).show();
+            }
+        });
+
+        // Navegación entre páginas del PDF
+        $( '#btn-anterior' ).on( 'click', () => irAPagina( estado.paginaActual - 1 ) );
+        $( '#btn-siguiente' ).on( 'click', () => irAPagina( estado.paginaActual + 1 ) );
+        $( '#input-pagina' ).on( 'change', function () {
+            irAPagina( parseInt( this.value ) );
+        });
+
+        // Cambios en los inputs numéricos de posición/tamaño
+        $( '#pos-left, #pos-top, #pos-ancho, #pos-alto' ).on( 'input', actualizarDesdeInputs );
+
+        // Eliminar el overlay seleccionado
+        $( '#btn-eliminar' ).on( 'click', eliminarSeleccionado );
+
+        // Guardar todos los overlays
+        $( '#btn-guardar' ).on( 'click', guardarTodo );
+    }
+
+    /* =========================================================
+       CARGA Y RENDERIZADO DEL PDF
+    ========================================================= */
+
+    /**
+     * Envía el archivo PDF al servidor para comprimirlo y guardarlo.
+     */
+    function subirPDF( archivo ) {
+        const fd = new FormData();
+        fd.append( 'action',       'flipbook_subir_pdf' );
+        fd.append( 'nonce',        flipbookAdmin.nonce );
+        fd.append( 'pdf_file',     archivo );
+        fd.append( 'titulo',       $( '#input-titulo' ).val() || archivo.name );
+        fd.append( 'flipbook_id',  estado.flipbookId );
+
+        $( '#info-pdf' ).text( 'Subiendo y comprimiendo PDF...' );
+
+        $.ajax({
+            url:         flipbookAdmin.ajax_url,
+            method:      'POST',
+            data:        fd,
+            processData: false,
+            contentType: false,
+            success( respuesta ) {
+                if ( respuesta.success ) {
+                    const datos = respuesta.data;
+                    estado.flipbookId   = datos.flipbook_id;
+                    estado.pdfUrl       = datos.pdf_url;
+                    estado.totalPaginas = datos.paginas;
+
+                    $( '#info-pdf' ).text(
+                        `✓ PDF cargado (${datos.tamanio}) — ${datos.paginas} páginas`
+                    );
+                    $( '#total-paginas' ).text( estado.totalPaginas );
+                    $( '#input-pagina' ).attr( 'max', estado.totalPaginas );
+
+                    cargarPDF( datos.pdf_url );
+                } else {
+                    $( '#info-pdf' ).text( 'Error: ' + respuesta.data );
+                }
+            },
+            error() {
+                $( '#info-pdf' ).text( 'Error al conectar con el servidor.' );
+            }
+        });
+    }
+
+    /**
+     * Inicializa PDF.js y carga el documento desde la URL dada.
+     */
+    function cargarPDF( url ) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        pdfjsLib.getDocument( url ).promise.then( pdf => {
+            estado.pdfDoc       = pdf;
+            estado.totalPaginas = pdf.numPages;
+            $( '#total-paginas' ).text( estado.totalPaginas );
+            $( '#input-pagina' ).attr( 'max', estado.totalPaginas );
+            renderizarPagina( estado.paginaActual );
+        });
+    }
+
+    /**
+     * Renderiza la página indicada del PDF en el canvas.
+     */
+    function renderizarPagina( num ) {
+        if ( ! estado.pdfDoc ) return;
+
+        // Limitar el número de página al rango válido
+        num = Math.max( 1, Math.min( num, estado.totalPaginas ) );
+        estado.paginaActual = num;
+        $( '#input-pagina' ).val( num );
+
+        estado.pdfDoc.getPage( num ).then( pagina => {
+            const viewport = pagina.getViewport({ scale: 1.5 });
+            const canvas   = document.getElementById( 'canvas-pdf' );
+            const ctx      = canvas.getContext( '2d' );
+
+            canvas.width  = viewport.width;
+            canvas.height = viewport.height;
+
+            // Ajustar el contenedor al tamaño del canvas
+            $( '#contenedor-pagina' ).css({
+                width:  viewport.width  + 'px',
+                height: viewport.height + 'px',
+            });
+
+            pagina.render({ canvasContext: ctx, viewport }).promise.then( () => {
+                renderizarOverlays();
+            });
+        });
+    }
+
+    function irAPagina( n ) {
+        renderizarPagina( n );
+    }
+
+    /* =========================================================
+       SISTEMA DE OVERLAYS
+    ========================================================= */
+
+    function renderizarOverlays() {
+        const capa = $( '#capa-overlays' );
+        const contenedor = document.getElementById( 'contenedor-pagina' );
+        const W = contenedor.offsetWidth;
+        const H = contenedor.offsetHeight;
+
+        // Limpiar la capa y ajustar su tamaño al canvas
+        capa.empty().css({ width: W + 'px', height: H + 'px' });
+
+        // Filtrar solo los overlays de la página actual
+        const overlaysPagina = estado.overlays.filter(
+            ov => ov.pagina === estado.paginaActual
+        );
+
+        overlaysPagina.forEach( ov => {
+            const el = construirElementoOverlay( ov, W, H );
+            capa.append( el );
+        });
+
+        vincularEventosOverlay();
+    }
+
+    /**
+     * Construye el elemento DOM de un overlay según su tipo.
+     * Convierte coordenadas porcentuales a píxeles.
+     */
+    function construirElementoOverlay( ov, W, H ) {
+        const left   = ( ov.left  / 100 ) * W;
+        const top    = ( ov.top   / 100 ) * H;
+        const ancho  = ( ov.ancho / 100 ) * W;
+        const alto   = ( ov.alto  / 100 ) * H;
+
+        const estaSeleccionado = estado.seleccionado === ov.tempId;
+
+        // Contenido interno según el tipo de overlay
+        let contenidoInterno = '';
+        switch ( ov.tipo ) {
+            case 'youtube':
+                contenidoInterno = `<div class="overlay-icono overlay-yt">▶</div>`;
+                break;
+            case 'imagen':
+                contenidoInterno = `<img src="${escaparHtml( ov.datos.url || '' )}"
+                                        style="width:100%;height:100%;object-fit:cover;" />`;
+                break;
+            case 'presentacion':
+                contenidoInterno = `<div class="overlay-icono overlay-slide">📽</div>`;
+                break;
+            case 'audio':
+                // Botón rojo con ícono SVG de altavoz (color #C70000)
+                contenidoInterno = `
+                    <div class="overlay-audio" style="background:${COLOR_AUDIO};">
+                        <svg viewBox="0 0 24 24" fill="white" width="50%" height="50%">
+                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                        </svg>
+                    </div>`;
+                break;
+        }
+
+        // Construir el elemento contenedor del overlay
+        const el = $(`
+            <div class="overlay${estaSeleccionado ? ' overlay-seleccionado' : ''}"
+                 data-tempid="${ov.tempId}"
+                 style="left:${left}px; top:${top}px; width:${ancho}px; height:${alto}px;">
+                ${contenidoInterno}
+                <!-- Handle en la esquina inferior derecha para redimensionar -->
+                <div class="handle-resize"></div>
+            </div>
+        `);
+
+        return el;
+    }
+
+    function vincularEventosOverlay() {
+
+        // Evento de arrastre del overlay completo
+        $( '.overlay' ).on( 'mousedown', function ( e ) {
+            if ( $( e.target ).hasClass( 'handle-resize' ) ) return;
+            e.preventDefault();
+
+            const tempId = $( this ).data( 'tempid' );
+            seleccionarOverlay( tempId );
+
+            estado.arrastrando = true;
+            const rect = this.getBoundingClientRect();
+            estado.arrastre.offsetX = e.clientX - rect.left;
+            estado.arrastre.offsetY = e.clientY - rect.top;
+
+            // Usar document para capturar el movimiento fuera del elemento
+            $( document ).on( 'mousemove.arrastre', function ( ev ) {
+                if ( ! estado.arrastrando ) return;
+
+                const contenedor = document.getElementById( 'contenedor-pagina' );
+                const rectConten = contenedor.getBoundingClientRect();
+                const W = contenedor.offsetWidth;
+                const H = contenedor.offsetHeight;
+
+                const ov   = obtenerOverlay( estado.seleccionado );
+                if ( ! ov ) return;
+
+                const ovAncho = ( ov.ancho / 100 ) * W;
+                const ovAlto  = ( ov.alto  / 100 ) * H;
+
+                // Calcular nueva posición y limitar dentro del canvas
+                let nuevoLeft = ev.clientX - rectConten.left - estado.arrastre.offsetX;
+                let nuevoTop  = ev.clientY - rectConten.top  - estado.arrastre.offsetY;
+                nuevoLeft = Math.max( 0, Math.min( nuevoLeft, W - ovAncho ) );
+                nuevoTop  = Math.max( 0, Math.min( nuevoTop,  H - ovAlto ) );
+
+                // Actualizar el estado con las nuevas coordenadas porcentuales
+                ov.left = ( nuevoLeft / W ) * 100;
+                ov.top  = ( nuevoTop  / H ) * 100;
+
+                // Mover el elemento visualmente
+                $( `.overlay[data-tempid="${ov.tempId}"]` ).css({
+                    left: nuevoLeft + 'px',
+                    top:  nuevoTop  + 'px',
+                });
+
+                actualizarPanelPosicion( ov );
+            });
+
+            $( document ).on( 'mouseup.arrastre', function () {
+                estado.arrastrando = false;
+                $( document ).off( 'mousemove.arrastre mouseup.arrastre' );
+            });
+        });
+
+        // Evento de redimensionado por el handle de la esquina inferior derecha
+        $( '.handle-resize' ).on( 'mousedown', function ( e ) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const tempId = $( this ).closest( '.overlay' ).data( 'tempid' );
+            seleccionarOverlay( tempId );
+
+            estado.redimensionando = true;
+            estado.resize.startX = e.clientX;
+            estado.resize.startY = e.clientY;
+
+            const ov        = obtenerOverlay( tempId );
+            const contenedor = document.getElementById( 'contenedor-pagina' );
+            const W = contenedor.offsetWidth;
+            const H = contenedor.offsetHeight;
+
+            // Guardar dimensiones iniciales en píxeles
+            estado.resize.startW = ( ov.ancho / 100 ) * W;
+            estado.resize.startH = ( ov.alto  / 100 ) * H;
+
+            $( document ).on( 'mousemove.resize', function ( ev ) {
+                if ( ! estado.redimensionando ) return;
+
+                const contenedor2 = document.getElementById( 'contenedor-pagina' );
+                const W2 = contenedor2.offsetWidth;
+                const H2 = contenedor2.offsetHeight;
+
+                const dx = ev.clientX - estado.resize.startX;
+                const dy = ev.clientY - estado.resize.startY;
+
+                // Aplicar nueva dimensión con mínimo de 50x30 píxeles
+                const nuevoAncho = Math.max( 50, estado.resize.startW + dx );
+                const nuevoAlto  = Math.max( 30, estado.resize.startH + dy );
+
+                ov.ancho = ( nuevoAncho / W2 ) * 100;
+                ov.alto  = ( nuevoAlto  / H2 ) * 100;
+
+                $( `.overlay[data-tempid="${ov.tempId}"]` ).css({
+                    width:  nuevoAncho + 'px',
+                    height: nuevoAlto  + 'px',
+                });
+
+                actualizarPanelPosicion( ov );
+            });
+
+            $( document ).on( 'mouseup.resize', function () {
+                estado.redimensionando = false;
+                $( document ).off( 'mousemove.resize mouseup.resize' );
+            });
+        });
+    }
+
+    /**
+     * Marca un overlay como seleccionado y muestra el panel de posición.
+     */
+    function seleccionarOverlay( tempId ) {
+        estado.seleccionado = tempId;
+        $( '.overlay' ).removeClass( 'overlay-seleccionado' );
+        $( `.overlay[data-tempid="${tempId}"]` ).addClass( 'overlay-seleccionado' );
+
+        const ov = obtenerOverlay( tempId );
+        if ( ov ) actualizarPanelPosicion( ov );
+        $( '#panel-posicion' ).show();
+    }
+
+    /**
+     * Rellena los inputs del panel de posición con las coordenadas del overlay.
+     */
+    function actualizarPanelPosicion( ov ) {
+        $( '#pos-left'  ).val( redondear2( ov.left ) );
+        $( '#pos-top'   ).val( redondear2( ov.top ) );
+        $( '#pos-ancho' ).val( redondear2( ov.ancho ) );
+        $( '#pos-alto'  ).val( redondear2( ov.alto ) );
+    }
+
+    /**
+     * Actualiza el estado del overlay cuando el usuario edita los inputs numéricos.
+     */
+    function actualizarDesdeInputs() {
+        if ( ! estado.seleccionado ) return;
+        const ov = obtenerOverlay( estado.seleccionado );
+        if ( ! ov ) return;
+
+        ov.left  = parseFloat( $( '#pos-left'  ).val() ) || ov.left;
+        ov.top   = parseFloat( $( '#pos-top'   ).val() ) || ov.top;
+        ov.ancho = parseFloat( $( '#pos-ancho' ).val() ) || ov.ancho;
+        ov.alto  = parseFloat( $( '#pos-alto'  ).val() ) || ov.alto;
+
+        // Re-renderizar para reflejar los cambios visuales
+        renderizarOverlays();
+    }
+
+    /**
+     * Elimina el overlay seleccionado de la BD (si tiene id) y del estado.
+     */
+    function eliminarSeleccionado() {
+        if ( ! estado.seleccionado ) return;
+        const ov = obtenerOverlay( estado.seleccionado );
+        if ( ! ov ) return;
+
+        // Si ya fue guardado en BD, eliminarlo del servidor
+        if ( ov.id ) {
+            $.post( flipbookAdmin.ajax_url, {
+                action:     'flipbook_eliminar_overlay',
+                nonce:      flipbookAdmin.nonce,
+                overlay_id: ov.id,
+            });
+        }
+
+        // Quitar del estado local
+        estado.overlays    = estado.overlays.filter( o => o.tempId !== estado.seleccionado );
+        estado.seleccionado = null;
+        $( '#panel-posicion' ).hide();
+        renderizarOverlays();
+    }
+
+    /* =========================================================
+       GESTIÓN DE MODALES
+    ========================================================= */
+
+    function abrirModal( tipo ) {
+        cerrarTodosLosModales();
+        $( '#fondo-modal' ).show();
+        $( '#modal-' + tipo ).show();
+    }
+
+    function cerrarTodosLosModales() {
+        $( '.modal' ).hide();
+        $( '#fondo-modal' ).hide();
+    }
+
+    /* =========================================================
+       CONFIRMACIONES DE CADA MODAL
+    ========================================================= */
+
+    function confirmarYoutube() {
+        const url = $( '#yt-url' ).val().trim();
+        if ( ! url ) { alert( 'Ingresa una URL de YouTube.' ); return; }
+
+        const videoId = extraerIdYoutube( url );
+        if ( ! videoId ) { alert( 'URL de YouTube no válida.' ); return; }
+
+        const datos = {
+            videoId:   videoId,
+            controles: $( '#yt-controles' ).is( ':checked' ) ? 1 : 0,
+            autoplay:  $( '#yt-autoplay'  ).is( ':checked' ) ? 1 : 0,
+            silencio:  $( '#yt-silencio'  ).is( ':checked' ) ? 1 : 0,
+            loop:      $( '#yt-loop'      ).is( ':checked' ) ? 1 : 0,
+            inicio:    tiempoASegundos( $( '#yt-inicio' ).val() ),
+            modo:      $( 'input[name="yt-modo"]:checked' ).val(),
+        };
+
+        agregarOverlay( 'youtube', datos, 20, 20, 30, 18 );
+        cerrarTodosLosModales();
+    }
+
+    function confirmarImagen() {
+        const archivo = $( '#archivo-imagen' )[0].files[0];
+        if ( ! archivo ) { alert( 'Selecciona una imagen.' ); return; }
+
+        const fd = new FormData();
+        fd.append( 'action', 'flipbook_subir_imagen' );
+        fd.append( 'nonce',  flipbookAdmin.nonce );
+        fd.append( 'imagen', archivo );
+
+        $.ajax({
+            url: flipbookAdmin.ajax_url, method: 'POST',
+            data: fd, processData: false, contentType: false,
+            success( respuesta ) {
+                if ( respuesta.success ) {
+                    agregarOverlay( 'imagen', {
+                        url:           respuesta.data.url,
+                        attachment_id: respuesta.data.attachment_id,
+                    }, 10, 10, 30, 25 );
+                    cerrarTodosLosModales();
+                } else {
+                    alert( 'Error al subir la imagen: ' + respuesta.data );
+                }
+            }
+        });
+    }
+
+    function confirmarPresentacion() {
+        const archivos = $( '#archivos-slides' )[0].files;
+        if ( ! archivos || archivos.length === 0 ) {
+            alert( 'Selecciona al menos una imagen.' );
+            return;
+        }
+
+        const maxArchivos = Math.min( archivos.length, 10 );
+        const promesas    = [];
+
+        // Subir todas las imágenes en paralelo
+        for ( let i = 0; i < maxArchivos; i++ ) {
+            const fd = new FormData();
+            fd.append( 'action', 'flipbook_subir_imagen' );
+            fd.append( 'nonce',  flipbookAdmin.nonce );
+            fd.append( 'imagen', archivos[i] );
+
+            promesas.push( $.ajax({
+                url: flipbookAdmin.ajax_url, method: 'POST',
+                data: fd, processData: false, contentType: false,
+            }));
+        }
+
+        Promise.all( promesas ).then( resultados => {
+            const urls = resultados
+                .filter( r => r.success )
+                .map( r => r.data.url );
+
+            if ( ! urls.length ) {
+                alert( 'No se pudieron subir las imágenes.' );
+                return;
+            }
+
+            const datos = {
+                imagenes:   urls,
+                autoplay:   $( '#slide-autoplay'  ).is( ':checked' ),
+                loop:       $( '#slide-loop'       ).is( ':checked' ),
+                aleatorio:  $( '#slide-aleatorio'  ).is( ':checked' ),
+                flechas:    $( '#slide-flechas'    ).is( ':checked' ),
+                duracion:   parseInt( $( '#slide-duracion'   ).val() ),
+                transicion: $( '#slide-transicion' ).val(),
+            };
+
+            agregarOverlay( 'presentacion', datos, 10, 10, 35, 28 );
+            cerrarTodosLosModales();
+        });
+    }
+
+    function confirmarAudio() {
+        const archivo = $( '#archivo-audio' )[0].files[0];
+        if ( ! archivo ) { alert( 'Selecciona un archivo de audio.' ); return; }
+
+        const fd = new FormData();
+        fd.append( 'action', 'flipbook_subir_audio' );
+        fd.append( 'nonce',  flipbookAdmin.nonce );
+        fd.append( 'audio',  archivo );
+
+        $.ajax({
+            url: flipbookAdmin.ajax_url, method: 'POST',
+            data: fd, processData: false, contentType: false,
+            success( respuesta ) {
+                if ( respuesta.success ) {
+                    agregarOverlay( 'audio', {
+                        url:      respuesta.data.url,
+                        autoplay: $( '#audio-autoplay' ).is( ':checked' ),
+                    }, 5, 5, 8, 9 );
+                    cerrarTodosLosModales();
+                } else {
+                    alert( 'Error al subir el audio: ' + respuesta.data );
+                }
+            }
+        });
+    }
+
+    /* =========================================================
+       GESTIÓN DEL ARRAY DE OVERLAYS
+    ========================================================= */
+
+    /**
+     * Agrega un nuevo overlay al estado y lo renderiza en el canvas.
+     */
+    function agregarOverlay( tipo, datos, left, top, ancho, alto ) {
+        const ov = {
+            tempId: 'temp_' + ( contadorTemp++ ),
+            id:     null,       // Será asignado por la BD al guardar
+            tipo,
+            pagina: estado.paginaActual,
+            left, top, ancho, alto,
+            datos,
+        };
+        estado.overlays.push( ov );
+        renderizarOverlays();
+        seleccionarOverlay( ov.tempId );
+    }
+
+    /**
+     * Busca un overlay en el estado por su tempId.
+     */
+    function obtenerOverlay( tempId ) {
+        return estado.overlays.find( o => o.tempId === tempId );
+    }
+
+    /* =========================================================
+       CARGA Y GUARDADO EN SERVIDOR
+    ========================================================= */
+
+    /**
+     * Carga los overlays del flipbook desde la base de datos.
+     * Reemplaza el estado local con los datos del servidor.
+     */
+    function cargarOverlays() {
+        $.post( flipbookAdmin.ajax_url, {
+            action:      'flipbook_obtener_overlays',
+            nonce:       flipbookAdmin.nonce,
+            flipbook_id: estado.flipbookId,
+        }, function ( respuesta ) {
+            if ( respuesta.success && respuesta.data ) {
+                estado.overlays = respuesta.data.map( fila => ({
+                    tempId: 'server_' + fila.id,
+                    id:     fila.id,
+                    tipo:   fila.tipo,
+                    pagina: parseInt( fila.pagina ),
+                    left:   parseFloat( fila.pos_left ),
+                    top:    parseFloat( fila.pos_top ),
+                    ancho:  parseFloat( fila.ancho ),
+                    alto:   parseFloat( fila.alto ),
+                    datos:  fila.datos,
+                }));
+                renderizarOverlays();
+            }
+        });
+    }
+
+    /**
+     * Serializa todos los overlays y los envía al servidor para persistirlos.
+     * Tras guardar, recarga los overlays para sincronizar los IDs reales de la BD.
+     */
+    function guardarTodo() {
+        if ( ! estado.flipbookId ) {
+            alert( 'Primero carga un PDF para crear el flipbook.' );
+            return;
+        }
+
+        const carga = estado.overlays.map( ov => ({
+            id:     ov.id,
+            tipo:   ov.tipo,
+            pagina: ov.pagina,
+            left:   ov.left,
+            top:    ov.top,
+            ancho:  ov.ancho,
+            alto:   ov.alto,
+            datos:  ov.datos,
+        }));
+
+        $.post( flipbookAdmin.ajax_url, {
+            action:      'flipbook_guardar_overlays',
+            nonce:       flipbookAdmin.nonce,
+            flipbook_id: estado.flipbookId,
+            overlays:    JSON.stringify( carga ),
+        }, function ( respuesta ) {
+            if ( respuesta.success ) {
+                mostrarNotificacion( '✓ Cambios guardados correctamente.', 'exito' );
+                cargarOverlays(); // Sincronizar IDs reales de la BD
+            } else {
+                mostrarNotificacion( 'Error: ' + respuesta.data, 'error' );
+            }
+        });
+    }
+
+    /* =========================================================
+       UTILIDADES
+    ========================================================= */
+
+    /**
+     * Extrae el ID de video de una URL de YouTube en cualquier formato.
+     * Soporta: youtu.be/ID, watch?v=ID, embed/ID, shorts/ID y solo el ID.
+     */
+    function extraerIdYoutube( url ) {
+        const regex = /(?:youtu\.be\/|v=|\/v\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/;
+        const coincidencia = url.match( regex );
+        if ( coincidencia ) return coincidencia[1];
+        // Verificar si es solo el ID
+        if ( /^[A-Za-z0-9_-]{11}$/.test( url ) ) return url;
+        return null;
+    }
+
+    /**
+     * Convierte un tiempo en formato MM:SS a segundos.
+     */
+    function tiempoASegundos( t ) {
+        if ( ! t ) return 0;
+        const partes = t.split( ':' ).map( Number );
+        if ( partes.length === 2 ) return partes[0] * 60 + partes[1];
+        return parseInt( t ) || 0;
+    }
+
+    /**
+     * Muestra miniaturas de los archivos seleccionados para el slideshow.
+     */
+    function previsualizarSlides( archivos ) {
+        const contenedor = $( '#miniaturas-slides' ).empty();
+        const max = Math.min( archivos.length, 10 );
+        for ( let i = 0; i < max; i++ ) {
+            const lector = new FileReader();
+            lector.onload = e => {
+                contenedor.append(
+                    `<img src="${e.target.result}" class="miniatura-slide" />`
+                );
+            };
+            lector.readAsDataURL( archivos[i] );
+        }
+    }
+
+    /**
+     * Muestra una notificación temporal en la parte superior del editor.
+     */
+    function mostrarNotificacion( mensaje, tipo ) {
+        const clase   = tipo === 'exito' ? 'notice-success' : 'notice-error';
+        const notif   = $( `<div class="notice ${clase} is-dismissible"><p>${mensaje}</p></div>` );
+        $( '.barra-superior' ).after( notif );
+        setTimeout( () => notif.fadeOut( 300, () => notif.remove() ), 3500 );
+    }
+
+    /** Redondea a 2 decimales. */
+    function redondear2( n ) {
+        return Math.round( n * 100 ) / 100;
+    }
+
+    /** Escapa caracteres especiales HTML. */
+    function escaparHtml( s ) {
+        return String( s )
+            .replace( /&/g,  '&amp;'  )
+            .replace( /</g,  '&lt;'   )
+            .replace( />/g,  '&gt;'   )
+            .replace( /"/g,  '&quot;' );
+    }
+
+})( jQuery );
