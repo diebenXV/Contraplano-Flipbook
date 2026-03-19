@@ -1,0 +1,72 @@
+/* ============================================================
+   viewer.css — Estilos del visor público de Flipbook (frontend)
+
+   Diseñado para ser compacto y no interferir con el tema
+   de WordPress del usuario. Solo contiene lo estrictamente
+   necesario para que el visor funcione correctamente.
+============================================================ */
+
+/* Contenedor principal del flipbook en el frontend */
+.flipbook-contenedor {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    display: flex;
+    flex-direction: column;
+    background: #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* Barra de navegación entre páginas */
+.flipbook-barra {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: #1e293b;
+    padding: 8px 16px;
+    color: #fff;
+    font-size: 14px;
+}
+
+/* Botones de la barra de navegación */
+.flipbook-btn {
+    background: rgba(255,255,255,.15);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 5px;
+    padding: 5px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background .15s;
+}
+.flipbook-btn:hover { background: rgba(255,255,255,.25); }
+
+/* Texto de información de página actual */
+.flipbook-info-pagina {
+    font-size: 13px;
+    color: #cbd5e1;
+}
+
+/* Área del canvas con scroll si es necesario */
+.flipbook-canvas-wrapper {
+    position: relative;
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    overflow: auto;
+    padding: 16px;
+}
+
+/* Canvas donde se renderiza el PDF */
+.flipbook-canvas {
+    display: block;
+    box-shadow: 0 4px 24px rgba(0,0,0,.3);
+    max-width: 100%;
+}
+
+/* Capa de overlays posicionada sobre el canvas */
+.flipbook-overlays {
+    position: absolute;
+    pointer-events: all;
+}
