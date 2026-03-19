@@ -1209,47 +1209,146 @@
                 $btn.prop( 'disabled', false ).text( textoOriginal );
             }, 300 );
         } else {
-            // Descargar con overlays (copia del PDF optimizado)
-            $.ajax({
-                url: flipbookAdmin.ajax_url,
-                type: 'POST',
-                dataType: 'json',
-                timeout: 30000,
-                data: {
-                    action: 'flipbook_descargar_con_overlays',
-                    nonce: flipbookAdmin.nonce,
-                    flipbook_id: flipbookAdmin.flipbook_id,
-                },
-                success: function ( response ) {
-                    console.log( '✓ Respuesta descarga:', response );
-                    if ( response.success && response.data && response.data.download_url ) {
-                        const link = document.createElement( 'a' );
-                        link.href = response.data.download_url;
-                        link.download = response.data.filename || 'flipbook.pdf';
-                        link.style.display = 'none';
-                        document.body.appendChild( link );
-                        link.click();
-                        document.body.removeChild( link );
-                        
-                        mostrarNotificacion( '✓ PDF descargándose...', 'exito' );
-                        cerrarTodosLosModales();
-                    } else {
-                        mostrarNotificacion( '❌ Error al generar descarga', 'error' );
-                    }
-                    $btn.prop( 'disabled', false ).text( textoOriginal );
-                },
-                error: function ( xhr, status, error ) {
-                    console.error( '❌ Error AJAX descarga:', { status, error, response: xhr.responseText } );
-                    mostrarNotificacion( '❌ Error al descargar PDF', 'error' );
-                    $btn.prop( 'disabled', false ).text( textoOriginal );
-                },
-                complete: function () {
-                    if ( ! $btn.prop( 'disabled' ) ) {
-                        $btn.prop( 'disabled', false ).text( textoOriginal );
-                    }
-                }
-            });
+            generarPDFConOverlaysCliente( $btn, textoOriginal );
         }
+    }
+
+    async function generarPDFConOverlaysCliente( $btn, textoOriginal ) {
+        try {
+            if ( ! window.jspdf || ! window.jspdf.jsPDF ) {
+                throw new Error( 'jsPDF no está disponible.' );
+            }
+
+            if ( ! estado.pdfDoc ) {
+                estado.pdfDoc = await pdfjsLib.getDocument( flipbookAdmin.pdf_url ).promise;
+                estado.totalPaginas = estado.pdfDoc.numPages;
+            }
+
+            const total = estado.totalPaginas || estado.pdfDoc.numPages;
+            const { jsPDF } = window.jspdf;
+            let pdf = null;
+
+            for ( let i = 1; i <= total; i++ ) {
+                $btn.text( `⏳ Renderizando ${i}/${total}...` );
+
+                const page = await estado.pdfDoc.getPage( i );
+                const viewport = page.getViewport({ scale: 2 });
+                const canvas = document.createElement( 'canvas' );
+                const ctx = canvas.getContext( '2d' );
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                await page.render({ canvasContext: ctx, viewport }).promise;
+
+                const overlaysPagina = ( estado.overlays || [] )
+                    .filter( ov => parseInt( ov.pagina ) === i );
+
+                for ( const ov of overlaysPagina ) {
+                    await dibujarOverlayExport( ctx, ov, canvas.width, canvas.height, i );
+                }
+
+                const orientacion = canvas.width > canvas.height ? 'landscape' : 'portrait';
+                const formato = [ canvas.width, canvas.height ];
+                const dataUrl = canvas.toDataURL( 'image/jpeg', 0.92 );
+
+                if ( i === 1 ) {
+                    pdf = new jsPDF({ orientation: orientacion, unit: 'pt', format: formato });
+                } else {
+                    pdf.addPage( formato, orientacion );
+                }
+
+                pdf.addImage( dataUrl, 'JPEG', 0, 0, canvas.width, canvas.height );
+            }
+
+            const nombre = ( flipbookAdmin.titulo || 'flipbook' ).toString().trim()
+                .replace( /\s+/g, '-' )
+                .replace( /[^A-Za-z0-9_-]/g, '' ) || 'flipbook';
+
+            pdf.save( `${nombre}-con-elementos.pdf` );
+            mostrarNotificacion( '✓ PDF con elementos generado correctamente.', 'exito' );
+            cerrarTodosLosModales();
+        } catch ( err ) {
+            console.error( '❌ Error generando PDF con overlays:', err );
+            mostrarNotificacion( '❌ No se pudo generar el PDF con elementos.', 'error' );
+        } finally {
+            $btn.prop( 'disabled', false ).text( textoOriginal );
+        }
+    }
+
+    async function dibujarOverlayExport( ctx, ov, W, H, paginaActual ) {
+        const left  = ( parseFloat( ov.left  || 0 ) / 100 ) * W;
+        const top   = ( parseFloat( ov.top   || 0 ) / 100 ) * H;
+        const ancho = ( parseFloat( ov.ancho || 20 ) / 100 ) * W;
+        const alto  = ( parseFloat( ov.alto  || 10 ) / 100 ) * H;
+        const d = ov.datos || {};
+
+        if ( ov.tipo === 'imagen' && d.url ) {
+            try {
+                const img = await cargarImagenParaExport( d.url );
+                ctx.drawImage( img, left, top, ancho, alto );
+                return;
+            } catch (e) {
+                // Si falla la imagen, dibujar placeholder.
+            }
+        }
+
+        if ( ov.tipo === 'presentacion' && Array.isArray( d.imagenes ) && d.imagenes.length > 0 ) {
+            try {
+                const img = await cargarImagenParaExport( d.imagenes[0] );
+                ctx.drawImage( img, left, top, ancho, alto );
+                return;
+            } catch (e) {
+                // Si falla la imagen, dibujar placeholder.
+            }
+        }
+
+        if ( ov.tipo === 'numero-pagina' ) {
+            const color = d.color || '#000000';
+            const tam = parseInt( d.tamanio ) || 24;
+            const peso = parseInt( d.peso ) || 600;
+            ctx.save();
+            ctx.fillStyle = color;
+            ctx.font = `${peso} ${tam}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText( String( paginaActual ), left + ( ancho / 2 ), top + ( alto / 2 ) );
+            ctx.restore();
+            return;
+        }
+
+        if ( ov.tipo === 'audio' ) {
+            ctx.save();
+            ctx.fillStyle = '#C70000';
+            ctx.fillRect( left, top, ancho, alto );
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = `${Math.max( 12, Math.floor( alto * 0.45 ) )}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText( 'AUDIO', left + ( ancho / 2 ), top + ( alto / 2 ) );
+            ctx.restore();
+            return;
+        }
+
+        // Placeholders para tipos no renderizables directamente en PDF (ej. YouTube)
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect( left, top, ancho, alto );
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `${Math.max( 12, Math.floor( alto * 0.22 ) )}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText( ( ov.tipo || 'overlay' ).toUpperCase(), left + ( ancho / 2 ), top + ( alto / 2 ) );
+        ctx.restore();
+    }
+
+    function cargarImagenParaExport( url ) {
+        return new Promise( ( resolve, reject ) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => resolve( img );
+            img.onerror = reject;
+            img.src = url;
+        });
     }
 
     /* =========================================================

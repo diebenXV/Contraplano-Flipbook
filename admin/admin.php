@@ -76,11 +76,18 @@ class Flipbook_Admin {
             [], '3.11.174', true
         );
 
+        // jsPDF — exportación de PDF desde el navegador (con overlays renderizados)
+        wp_enqueue_script(
+            'jspdf',
+            'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+            [], '2.5.1', true
+        );
+
         // Script principal del editor visual
         wp_enqueue_script(
             'flipbook-editor',
             FLIPBOOK_URL . 'assets/js/editor.js',
-            [ 'jquery', 'pdfjs' ],
+            [ 'jquery', 'pdfjs', 'jspdf' ],
             FLIPBOOK_VERSION,
             true
         );
@@ -373,6 +380,23 @@ class Flipbook_Admin {
             $pdf_url    = get_post_meta( $flipbook_id, '_flipbook_pdf_url', true );
             $pdf_paginas = get_post_meta( $flipbook_id, '_flipbook_pdf_pages', true );
             $post       = get_post( $flipbook_id );
+
+            // Reparar rutas antiguas o mal formateadas a partir de la URL del PDF.
+            if ( ( ! $pdf_path || ! file_exists( $pdf_path ) ) && $pdf_url ) {
+                $uploads     = wp_upload_dir();
+                $uploads_url = trailingslashit( $uploads['baseurl'] );
+                $uploads_dir = trailingslashit( $uploads['basedir'] );
+
+                if ( strpos( $pdf_url, $uploads_url ) === 0 ) {
+                    $relativa = ltrim( substr( $pdf_url, strlen( $uploads_url ) ), '/' );
+                    $candidata = $uploads_dir . str_replace( '/', DIRECTORY_SEPARATOR, $relativa );
+
+                    if ( file_exists( $candidata ) ) {
+                        $pdf_path = $candidata;
+                        update_post_meta( $flipbook_id, '_flipbook_pdf_path', $pdf_path );
+                    }
+                }
+            }
             
             $archivo_existe = false;
             if ( $pdf_path && file_exists( $pdf_path ) ) {

@@ -17,6 +17,58 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class Flipbook_Ajax {
 
     /**
+     * Obtiene una ruta de PDF valida para un flipbook.
+     * Si la ruta guardada no existe, intenta reconstruirla desde la URL y autocorrige el meta.
+     *
+     * @param int $flipbook_id
+     * @return string Ruta valida o cadena vacia si no se pudo resolver.
+     */
+    private static function obtener_ruta_pdf_valida( $flipbook_id ) {
+        $pdf_path = get_post_meta( $flipbook_id, '_flipbook_pdf_path', true );
+
+        if ( $pdf_path && file_exists( $pdf_path ) ) {
+            return $pdf_path;
+        }
+
+        $pdf_url = get_post_meta( $flipbook_id, '_flipbook_pdf_url', true );
+        if ( ! $pdf_url ) {
+            return '';
+        }
+
+        $uploads      = wp_upload_dir();
+        $uploads_url  = trailingslashit( $uploads['baseurl'] );
+        $uploads_dir  = trailingslashit( $uploads['basedir'] );
+
+        // Caso normal: URL dentro de uploads (http://sitio/.../uploads/...)
+        if ( strpos( $pdf_url, $uploads_url ) === 0 ) {
+            $relativa   = ltrim( substr( $pdf_url, strlen( $uploads_url ) ), '/' );
+            $candidata  = $uploads_dir . str_replace( '/', DIRECTORY_SEPARATOR, $relativa );
+
+            if ( file_exists( $candidata ) ) {
+                update_post_meta( $flipbook_id, '_flipbook_pdf_path', $candidata );
+                return $candidata;
+            }
+        }
+
+        // Fallback: usar el path de la URL y buscar desde /uploads/
+        $url_path = wp_parse_url( $pdf_url, PHP_URL_PATH );
+        if ( $url_path ) {
+            $pos_uploads = strpos( $url_path, '/uploads/' );
+            if ( $pos_uploads !== false ) {
+                $relativa  = ltrim( substr( $url_path, $pos_uploads + strlen( '/uploads/' ) ), '/' );
+                $candidata = $uploads_dir . str_replace( '/', DIRECTORY_SEPARATOR, $relativa );
+
+                if ( file_exists( $candidata ) ) {
+                    update_post_meta( $flipbook_id, '_flipbook_pdf_path', $candidata );
+                    return $candidata;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    /**
      * Recibe un archivo PDF, lo comprime y crea/actualiza el flipbook.
      * Acción: flipbook_subir_pdf
      */
@@ -289,7 +341,7 @@ class Flipbook_Ajax {
         }
 
         // Paso 2: Borrar el archivo PDF del disco
-        $pdf_path = get_post_meta( $flipbook_id, '_flipbook_pdf_path', true );
+        $pdf_path = self::obtener_ruta_pdf_valida( $flipbook_id );
         if ( $pdf_path && file_exists( $pdf_path ) ) {
             unlink( $pdf_path );
         }
@@ -403,7 +455,7 @@ class Flipbook_Ajax {
         }
 
         // Obtener datos del flipbook
-        $pdf_path = get_post_meta( $flipbook_id, '_flipbook_pdf_path', true );
+        $pdf_path = self::obtener_ruta_pdf_valida( $flipbook_id );
         $post = get_post( $flipbook_id );
         $titulo = $post ? $post->post_title : 'Flipbook';
 
