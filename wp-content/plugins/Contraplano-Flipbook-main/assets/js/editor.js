@@ -11,9 +11,9 @@
        ESTADO
     ========================================================= */
     const estado = {
-        flipbookId:      parseInt( flipbookAdmin.flipbook_id ) || 0,
-        pdfUrl:          flipbookAdmin.pdf_url || '',
-        totalPaginas:    parseInt( flipbookAdmin.pdf_paginas ) || 0,
+        flipbookId:      parseInt( contraplanoFlipbookAdmin.flipbook_id ) || 0,
+        pdfUrl:          contraplanoFlipbookAdmin.pdf_url || '',
+        totalPaginas:    parseInt( contraplanoFlipbookAdmin.pdf_paginas ) || 0,
         paginaActual:    1,
         pdfDoc:          null,
         overlays:        [],
@@ -24,22 +24,22 @@
         resize:          { startX: 0, startY: 0, startW: 0, startH: 0 },
     };
 
+    // Configuración de números de página (objeto separado, se persiste en BD)
+    const configNumerosPage = {
+        colorNumero:    '#666666',
+        colorFondo:     '#FFFFFF',
+        opacidadFondo:  0.8,
+        posicion:       'inferior-derecha',
+        tamanio:        14,
+        mostrar:        true,
+    };
+
     const COLOR_AUDIO = '#C70000';
     let contadorTemp  = 1;
 
     // Estado interno del slider de preview en modal
     let previewSlides = [];
     let previewIndice = 0;
-
-    // Configuración de números de página
-    const configNumerosPage = {
-        colorNumero:     '#666666',
-        colorFondo:      '#FFFFFF',
-        opacidadFondo:   0.8,
-        posicion:        'inferior-derecha', // inferior-derecha, inferior-izquierda, superior-derecha, superior-izquierda, centro, superior-centro, inferior-centro
-        tamanio:         14,
-        mostrar:         true,
-    };
 
     /* =========================================================
        INIT
@@ -64,7 +64,7 @@
                 <div class="barra-izquierda">
                     <label>Título:</label>
                     <input type="text" id="input-titulo"
-                           value="${escaparHtml(flipbookAdmin.titulo)}"
+                           value="${escaparHtml(contraplanoFlipbookAdmin.titulo)}"
                            placeholder="Nombre del flipbook" />
                 </div>
                 <div class="barra-centro">
@@ -109,55 +109,6 @@
                     </button>
 
                     <div class="separador"></div>
-                    <div class="sidebar-titulo">⚙ Números de página</div>
-                    
-                    <div style="margin-bottom: 10px;">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="cfg-mostrar-numeros" checked />
-                            Mostrar números
-                        </label>
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label>Color del número:</label>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <input type="color" id="cfg-color-numero" value="#666666" />
-                            <span id="cfg-color-numero-hex" style="font-size: 12px; color: #666;">#666666</span>
-                        </div>
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label>Color fondo:</label>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <input type="color" id="cfg-color-fondo" value="#FFFFFF" />
-                            <span id="cfg-color-fondo-hex" style="font-size: 12px; color: #666;">#FFFFFF</span>
-                        </div>
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label>Opacidad fondo: <span id="cfg-opacidad-val">80</span>%</label>
-                        <input type="range" id="cfg-opacidad" min="0" max="100" value="80" style="width: 100%; cursor: pointer;" />
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label>Posición:</label>
-                        <select id="cfg-posicion" style="width: 100%; padding: 6px; border: 1px solid #d1d5db; border-radius: 5px; font-size: 12px;">
-                            <option value="inferior-derecha">Inferior derecha</option>
-                            <option value="inferior-izquierda">Inferior izquierda</option>
-                            <option value="inferior-centro">Inferior centro</option>
-                            <option value="superior-derecha">Superior derecha</option>
-                            <option value="superior-izquierda">Superior izquierda</option>
-                            <option value="superior-centro">Superior centro</option>
-                            <option value="centro">Centro</option>
-                        </select>
-                    </div>
-
-                    <div style="margin-bottom: 10px;">
-                        <label>Tamaño de fuente: <span id="cfg-tamanio-val">14</span>px</label>
-                        <input type="range" id="cfg-tamanio" min="8" max="32" value="14" style="width: 100%; cursor: pointer;" />
-                    </div>
-
-                    <div class="separador"></div>
                     <div class="sidebar-titulo">Página</div>
                     <div class="nav-paginas">
                         <button id="btn-anterior">‹</button>
@@ -169,6 +120,51 @@
                         <span class="nav-sep">/</span>
                         <span id="total-paginas">0</span>
                         <button id="btn-siguiente">›</button>
+                    </div>
+
+                    <!-- SECCIÓN NÚMEROS DE PÁGINA -->
+                    <div class="separador"></div>
+                    <div class="sidebar-titulo">⚙ Números de página</div>
+
+                    <div style="margin-bottom:10px;">
+                        <label class="pnum-check-label">
+                            <input type="checkbox" id="cfg-mostrar-numeros" checked />
+                            Mostrar números
+                        </label>
+                    </div>
+                    <div style="margin-bottom:10px;">
+                        <label class="pnum-label">Color del número:</label>
+                        <div class="pnum-color-fila">
+                            <input type="color" id="cfg-color-numero" value="#666666" />
+                            <span id="cfg-color-numero-hex" class="pnum-hex">#666666</span>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:10px;">
+                        <label class="pnum-label">Color fondo:</label>
+                        <div class="pnum-color-fila">
+                            <input type="color" id="cfg-color-fondo" value="#FFFFFF" />
+                            <span id="cfg-color-fondo-hex" class="pnum-hex">#FFFFFF</span>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:10px;">
+                        <label class="pnum-label">Opacidad fondo: <span id="cfg-opacidad-val">80</span>%</label>
+                        <input type="range" id="cfg-opacidad" min="0" max="100" value="80" class="pnum-slider" />
+                    </div>
+                    <div style="margin-bottom:10px;">
+                        <label class="pnum-label">Posición:</label>
+                        <select id="cfg-posicion" class="pnum-select">
+                            <option value="inferior-derecha" selected>Inferior derecha</option>
+                            <option value="inferior-izquierda">Inferior izquierda</option>
+                            <option value="inferior-centro">Inferior centro</option>
+                            <option value="superior-derecha">Superior derecha</option>
+                            <option value="superior-izquierda">Superior izquierda</option>
+                            <option value="superior-centro">Superior centro</option>
+                            <option value="centro">Centro</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom:10px;">
+                        <label class="pnum-label">Tamaño de fuente: <span id="cfg-tamanio-val">14</span>px</label>
+                        <input type="range" id="cfg-tamanio" min="8" max="32" value="14" class="pnum-slider" />
                     </div>
 
                     <div id="panel-posicion" style="display:none;">
@@ -358,6 +354,14 @@
                         </label>
                     </div>
 
+                    <div class="audio-color-config">
+                        <label for="audio-icon-color">Color del ícono:</label>
+                        <div class="audio-color-fila">
+                            <input type="color" id="audio-icon-color" value="#ffffff" />
+                            <span id="audio-icon-color-hex">#ffffff</span>
+                        </div>
+                    </div>
+
                     <div class="zona-arrastre clickable" id="zona-audio-click">
                         <span id="audio-zona-texto">⬆ Haz clic para seleccionar audio (mp3, wav, ogg)</span>
                         <input type="file" id="archivo-audio"
@@ -531,41 +535,6 @@
             }
         });
 
-        // ---- Configuración de números de página ----
-        $( '#cfg-mostrar-numeros' ).on( 'change', function () {
-            configNumerosPage.mostrar = this.checked;
-            renderizarPagina( estado.paginaActual );
-        });
-
-        $( '#cfg-color-numero' ).on( 'input', function () {
-            configNumerosPage.colorNumero = this.value;
-            $( '#cfg-color-numero-hex' ).text( this.value );
-            renderizarPagina( estado.paginaActual );
-        });
-
-        $( '#cfg-color-fondo' ).on( 'input', function () {
-            configNumerosPage.colorFondo = this.value;
-            $( '#cfg-color-fondo-hex' ).text( this.value );
-            renderizarPagina( estado.paginaActual );
-        });
-
-        $( '#cfg-opacidad' ).on( 'input', function () {
-            configNumerosPage.opacidadFondo = parseInt( this.value ) / 100;
-            $( '#cfg-opacidad-val' ).text( this.value );
-            renderizarPagina( estado.paginaActual );
-        });
-
-        $( '#cfg-posicion' ).on( 'change', function () {
-            configNumerosPage.posicion = this.value;
-            renderizarPagina( estado.paginaActual );
-        });
-
-        $( '#cfg-tamanio' ).on( 'input', function () {
-            configNumerosPage.tamanio = parseInt( this.value );
-            $( '#cfg-tamanio-val' ).text( this.value );
-            renderizarPagina( estado.paginaActual );
-        });
-
         // ---- Imagen: abrir file input al hacer clic en la zona ----
         $( document ).on( 'click', '#zona-imagen-click', function ( e ) {
             if ( $( e.target ).is( 'input' ) ) return;
@@ -677,6 +646,10 @@
             $( '#link-color-hex' ).text( $( this ).val() );
         });
 
+        $( document ).on( 'input', '#audio-icon-color', function () {
+            $( '#audio-icon-color-hex' ).text( $( this ).val() );
+        });
+
         // Navegación páginas (input manual sin flechas tipo number)
         $( '#btn-anterior' ).on( 'click', () => irAPagina( estado.paginaActual - 1 ) );
         $( '#btn-siguiente' ).on( 'click', () => irAPagina( estado.paginaActual + 1 ) );
@@ -700,9 +673,39 @@
         // Vista previa — abre el visor en nueva pestaña
         $( document ).on( 'click', '#btn-preview', function () {
             if ( ! estado.flipbookId ) { alert( 'Primero guarda el flipbook.' ); return; }
-            const url = flipbookAdmin.ajax_url.replace( 'admin-ajax.php', '' )
+            const url = contraplanoFlipbookAdmin.ajax_url.replace( 'admin-ajax.php', '' )
                 + 'admin.php?page=flipbook-preview&flipbook_id=' + estado.flipbookId;
             window.open( url, '_blank' );
+        });
+
+        // ---- Números de página (versión Maverick con IDs cfg-*) ----
+        $( '#cfg-mostrar-numeros' ).on( 'change', function () {
+            configNumerosPage.mostrar = this.checked;
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-color-numero' ).on( 'input', function () {
+            configNumerosPage.colorNumero = this.value;
+            $( '#cfg-color-numero-hex' ).text( this.value );
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-color-fondo' ).on( 'input', function () {
+            configNumerosPage.colorFondo = this.value;
+            $( '#cfg-color-fondo-hex' ).text( this.value );
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-opacidad' ).on( 'input', function () {
+            configNumerosPage.opacidadFondo = parseInt( this.value ) / 100;
+            $( '#cfg-opacidad-val' ).text( this.value );
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-posicion' ).on( 'change', function () {
+            configNumerosPage.posicion = this.value;
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-tamanio' ).on( 'input', function () {
+            configNumerosPage.tamanio = parseInt( this.value );
+            $( '#cfg-tamanio-val' ).text( this.value );
+            renderizarPagina( estado.paginaActual );
         });
     }
 
@@ -819,7 +822,7 @@
     function subirPDF( archivo ) {
         const fd = new FormData();
         fd.append( 'action', 'flipbook_subir_pdf' );
-        fd.append( 'nonce',  flipbookAdmin.nonce );
+        fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
         fd.append( 'pdf_file', archivo );
         fd.append( 'titulo', $( '#input-titulo' ).val() || archivo.name );
         fd.append( 'flipbook_id', estado.flipbookId );
@@ -827,7 +830,7 @@
         $( '#info-pdf' ).text( 'Subiendo y comprimiendo PDF…' );
 
         $.ajax({
-            url: flipbookAdmin.ajax_url, method: 'POST',
+            url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
             data: fd, processData: false, contentType: false,
             success( r ) {
                 if ( r.success ) {
@@ -852,12 +855,27 @@
     function cargarPDF( url ) {
         pdfjsLib.GlobalWorkerOptions.workerSrc =
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-        pdfjsLib.getDocument( url ).promise.then( pdf => {
+
+        pdfjsLib.getDocument({
+            url:             url,
+            withCredentials: false,
+            cMapUrl:         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+            cMapPacked:      true,
+        }).promise.then( pdf => {
             estado.pdfDoc       = pdf;
             estado.totalPaginas = pdf.numPages;
             $( '#total-paginas' ).text( pdf.numPages );
             $( '#input-pagina'  ).attr( 'max', pdf.numPages );
+            const infoActual = $( '#info-pdf' ).text();
+            if ( infoActual && infoActual.includes( 'páginas' ) ) {
+                $( '#info-pdf' ).text(
+                    infoActual.replace( /\d+ páginas/, pdf.numPages + ' páginas' )
+                );
+            }
             renderizarPagina( 1 );
+        }).catch( err => {
+            $( '#info-pdf' ).text( 'Error al cargar el PDF: ' + ( err.message || err ) );
+            console.error( 'PDF.js error:', err );
         });
     }
 
@@ -875,107 +893,68 @@
             $( '#contenedor-pagina' ).css({ width: vp.width + 'px', height: vp.height + 'px' });
             pag.render({ canvasContext: cv.getContext( '2d' ), viewport: vp })
                .promise.then( () => {
+                   // Dibujar número de página sobre el canvas antes de los overlays
                    dibujarNumeroPagina( cv, num, estado.totalPaginas );
                    renderizarOverlays();
                });
         });
     }
 
+    /**
+     * Dibuja el número de página sobre el canvas del PDF.
+     * Implementación idéntica a la de Maverick para consistencia.
+     */
     function dibujarNumeroPagina( canvas, paginaActual, totalPaginas ) {
         if ( ! configNumerosPage.mostrar ) return;
 
-        const ctx = canvas.getContext( '2d' );
-        const padding = 15;
+        const ctx      = canvas.getContext( '2d' );
+        const padding  = 15;
         const fontSize = Math.max( configNumerosPage.tamanio, canvas.width * 0.015 );
-        const texto = `${paginaActual} / ${totalPaginas}`;
+        const texto    = `${paginaActual} / ${totalPaginas}`;
 
-        // Configurar fuente
-        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
-        ctx.fillStyle = configNumerosPage.colorNumero;
-        ctx.textBaseline = 'bottom';
+        ctx.font          = `bold ${fontSize}px Arial, sans-serif`;
+        ctx.fillStyle     = configNumerosPage.colorNumero;
+        ctx.textBaseline  = 'bottom';
 
-        // Medir ancho del texto para agregar fondo
-        const metrics = ctx.measureText( texto );
-        const textWidth = metrics.width;
+        const metrics    = ctx.measureText( texto );
+        const textWidth  = metrics.width;
         const textHeight = fontSize + 4;
 
-        // Calcular posición según configuración
         let x, y;
-        const posicion = configNumerosPage.posicion;
+        const pos = configNumerosPage.posicion;
 
-        if ( posicion === 'inferior-derecha' ) {
-            ctx.textAlign = 'right';
-            x = canvas.width - padding;
-            y = canvas.height - padding;
-        } else if ( posicion === 'inferior-izquierda' ) {
-            ctx.textAlign = 'left';
-            x = padding;
-            y = canvas.height - padding;
-        } else if ( posicion === 'inferior-centro' ) {
-            ctx.textAlign = 'center';
-            x = canvas.width / 2;
-            y = canvas.height - padding;
-        } else if ( posicion === 'superior-derecha' ) {
-            ctx.textAlign = 'right';
-            x = canvas.width - padding;
-            y = padding + fontSize;
-        } else if ( posicion === 'superior-izquierda' ) {
-            ctx.textAlign = 'left';
-            x = padding;
-            y = padding + fontSize;
-        } else if ( posicion === 'superior-centro' ) {
-            ctx.textAlign = 'center';
-            x = canvas.width / 2;
-            y = padding + fontSize;
-        } else if ( posicion === 'centro' ) {
-            ctx.textAlign = 'center';
-            x = canvas.width / 2;
-            y = ( canvas.height / 2 ) + ( fontSize / 2 );
-        }
+        if      ( pos === 'inferior-derecha'   ) { ctx.textAlign = 'right';  x = canvas.width - padding;  y = canvas.height - padding; }
+        else if ( pos === 'inferior-izquierda' ) { ctx.textAlign = 'left';   x = padding;                 y = canvas.height - padding; }
+        else if ( pos === 'inferior-centro'    ) { ctx.textAlign = 'center'; x = canvas.width / 2;        y = canvas.height - padding; }
+        else if ( pos === 'superior-derecha'   ) { ctx.textAlign = 'right';  x = canvas.width - padding;  y = padding + fontSize; }
+        else if ( pos === 'superior-izquierda' ) { ctx.textAlign = 'left';   x = padding;                 y = padding + fontSize; }
+        else if ( pos === 'superior-centro'    ) { ctx.textAlign = 'center'; x = canvas.width / 2;        y = padding + fontSize; }
+        else if ( pos === 'centro'             ) { ctx.textAlign = 'center'; x = canvas.width / 2;        y = ( canvas.height / 2 ) + ( fontSize / 2 ); }
 
-        // Calcular posición del fondo
-        let bgX, bgY, bgWidth = textWidth + 8, bgHeight = textHeight + 4;
+        const bgW = textWidth + 8, bgH = textHeight + 4;
+        let bgX, bgY;
 
-        if ( posicion === 'inferior-derecha' ) {
-            bgX = canvas.width - textWidth - padding - 4;
-            bgY = canvas.height - textHeight - padding;
-        } else if ( posicion === 'inferior-izquierda' ) {
-            bgX = padding - 4;
-            bgY = canvas.height - textHeight - padding;
-        } else if ( posicion === 'inferior-centro' ) {
-            bgX = ( canvas.width / 2 ) - ( bgWidth / 2 );
-            bgY = canvas.height - textHeight - padding;
-        } else if ( posicion === 'superior-derecha' ) {
-            bgX = canvas.width - textWidth - padding - 4;
-            bgY = padding - 4;
-        } else if ( posicion === 'superior-izquierda' ) {
-            bgX = padding - 4;
-            bgY = padding - 4;
-        } else if ( posicion === 'superior-centro' ) {
-            bgX = ( canvas.width / 2 ) - ( bgWidth / 2 );
-            bgY = padding - 4;
-        } else if ( posicion === 'centro' ) {
-            bgX = ( canvas.width / 2 ) - ( bgWidth / 2 );
-            bgY = ( canvas.height / 2 ) - ( bgHeight / 2 );
-        }
+        if      ( pos === 'inferior-derecha'   ) { bgX = canvas.width - textWidth - padding - 4; bgY = canvas.height - textHeight - padding; }
+        else if ( pos === 'inferior-izquierda' ) { bgX = padding - 4;                            bgY = canvas.height - textHeight - padding; }
+        else if ( pos === 'inferior-centro'    ) { bgX = ( canvas.width / 2 ) - ( bgW / 2 );     bgY = canvas.height - textHeight - padding; }
+        else if ( pos === 'superior-derecha'   ) { bgX = canvas.width - textWidth - padding - 4; bgY = padding - 4; }
+        else if ( pos === 'superior-izquierda' ) { bgX = padding - 4;                            bgY = padding - 4; }
+        else if ( pos === 'superior-centro'    ) { bgX = ( canvas.width / 2 ) - ( bgW / 2 );     bgY = padding - 4; }
+        else if ( pos === 'centro'             ) { bgX = ( canvas.width / 2 ) - ( bgW / 2 );     bgY = ( canvas.height / 2 ) - ( bgH / 2 ); }
 
-        // Dibujar fondo semi-transparente
-        const rgbColor = hexToRgb( configNumerosPage.colorFondo );
-        ctx.fillStyle = `rgba(${rgbColor.r}, ${rgbColor.g}, ${rgbColor.b}, ${configNumerosPage.opacidadFondo})`;
-        ctx.fillRect( bgX, bgY, bgWidth, bgHeight );
+        // Fondo semi-transparente
+        const rgb = hexARgb( configNumerosPage.colorFondo );
+        ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${configNumerosPage.opacidadFondo})`;
+        ctx.fillRect( bgX, bgY, bgW, bgH );
 
-        // Dibujar texto
+        // Texto del número
         ctx.fillStyle = configNumerosPage.colorNumero;
         ctx.fillText( texto, x, y );
     }
 
-    function hexToRgb( hex ) {
-        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec( hex );
-        return result ? {
-            r: parseInt( result[1], 16 ),
-            g: parseInt( result[2], 16 ),
-            b: parseInt( result[3], 16 )
-        } : { r: 102, g: 102, b: 102 };
+    function hexARgb( hex ) {
+        const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec( hex );
+        return r ? { r: parseInt(r[1],16), g: parseInt(r[2],16), b: parseInt(r[3],16) } : { r:102, g:102, b:102 };
     }
 
     function irAPagina( n ) { renderizarPagina( n ); }
@@ -1047,12 +1026,12 @@
                 break;
             }
             case 'audio': {
-                // Botón rojo #C70000 con ícono de altavoz SVG + elemento audio
                 const url = escaparHtml( ov.datos.url || '' );
+                const iconColor = escaparHtml( ov.datos.iconColor || '#ffffff' );
                 inner = `<div class="ov-audio-container">
-                    <div class="ov-audio-btn" style="background:${COLOR_AUDIO};">
-                        <svg viewBox="0 0 24 24" fill="white" width="55%" height="55%">
-                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                    <div class="ov-audio-btn" style="background:transparent;border:1px solid rgba(255,255,255,.45);">
+                        <svg viewBox="0 0 24 24" fill="${iconColor}" width="55%" height="55%">
+                            <path d="M8 5v14l11-7z"/>
                         </svg>
                     </div>
                     ${url ? `<audio class="ov-audio-el" src="${url}" preload="none"></audio>` : ''}
@@ -1100,10 +1079,24 @@
         // Reproducir/pausar audio del overlay en el editor
         $( '.ov-audio-btn' ).on( 'click', function ( e ) {
             e.stopPropagation();
+            const playPath  = 'M8 5v14l11-7z';
+            const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
+            const pathEl    = $( this ).find( 'path' )[0];
             const ae = $( this ).closest( '.ov-audio-container' ).find( '.ov-audio-el' )[0];
             if ( ! ae ) return;
-            if ( ae.paused ) { ae.play(); $( this ).addClass( 'activo' ); }
-            else             { ae.pause(); $( this ).removeClass( 'activo' ); }
+            if ( ae.paused ) {
+                ae.play();
+                $( this ).addClass( 'activo' );
+                if ( pathEl ) pathEl.setAttribute( 'd', pausePath );
+            } else {
+                ae.pause();
+                $( this ).removeClass( 'activo' );
+                if ( pathEl ) pathEl.setAttribute( 'd', playPath );
+            }
+            ae.onended = () => {
+                $( this ).removeClass( 'activo' );
+                if ( pathEl ) pathEl.setAttribute( 'd', playPath );
+            };
         });
 
         // Navegar slides del overlay en el editor
@@ -1125,7 +1118,7 @@
         $( '.overlay' ).on( 'mousedown', function ( e ) {
             if (
                 $( e.target ).hasClass( 'handle-resize' ) ||
-                $( e.target ).closest( '.ov-slide-prev,.ov-slide-next,.ov-audio-btn' ).length
+                $( e.target ).closest( '.ov-slide-prev,.ov-slide-next' ).length
             ) return;
 
             e.preventDefault();
@@ -1223,9 +1216,9 @@
         const ov = obtenerOverlay( estado.seleccionado );
         if ( ! ov ) return;
         if ( ov.id ) {
-            $.post( flipbookAdmin.ajax_url, {
+            $.post( contraplanoFlipbookAdmin.ajax_url, {
                 action: 'flipbook_eliminar_overlay',
-                nonce:  flipbookAdmin.nonce,
+                nonce:  contraplanoFlipbookAdmin.nonce,
                 overlay_id: ov.id,
             });
         }
@@ -1261,6 +1254,8 @@
             $( '#audio-zona-texto' ).text( '⬆ Haz clic para seleccionar audio (mp3, wav, ogg)' );
             $( '#confirmar-audio' ).prop( 'disabled', true );
             $( '#audio-play-btn' ).text( '▶' ).removeClass( 'pausando' );
+            $( '#audio-icon-color' ).val( '#ffffff' );
+            $( '#audio-icon-color-hex' ).text( '#ffffff' );
             const ae = document.getElementById( 'audio-el-preview' );
             if ( ae ) { ae.pause(); ae.src = ''; }
         }
@@ -1321,12 +1316,12 @@
 
         const fd = new FormData();
         fd.append( 'action', 'flipbook_subir_imagen' );
-        fd.append( 'nonce',  flipbookAdmin.nonce );
+        fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
         fd.append( 'imagen', f );
 
         $( '#confirmar-imagen' ).text( 'Subiendo…' ).prop( 'disabled', true );
         $.ajax({
-            url: flipbookAdmin.ajax_url, method: 'POST',
+            url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
             data: fd, processData: false, contentType: false,
             success( r ) {
                 $( '#confirmar-imagen' ).text( 'De acuerdo' ).prop( 'disabled', false );
@@ -1349,9 +1344,9 @@
         for ( let i = 0; i < max; i++ ) {
             const fd = new FormData();
             fd.append( 'action', 'flipbook_subir_imagen' );
-            fd.append( 'nonce',  flipbookAdmin.nonce );
+            fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
             fd.append( 'imagen', archivos[i] );
-            promesas.push( $.ajax({ url: flipbookAdmin.ajax_url, method: 'POST', data: fd, processData: false, contentType: false }) );
+            promesas.push( $.ajax({ url: contraplanoFlipbookAdmin.ajax_url, method: 'POST', data: fd, processData: false, contentType: false }) );
         }
 
         Promise.all( promesas ).then( rs => {
@@ -1378,19 +1373,20 @@
 
         const fd = new FormData();
         fd.append( 'action', 'flipbook_subir_audio' );
-        fd.append( 'nonce',  flipbookAdmin.nonce );
+        fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
         fd.append( 'audio',  f );
 
         $( '#confirmar-audio' ).text( 'Subiendo…' ).prop( 'disabled', true );
         $.ajax({
-            url: flipbookAdmin.ajax_url, method: 'POST',
+            url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
             data: fd, processData: false, contentType: false,
             success( r ) {
                 $( '#confirmar-audio' ).text( 'De acuerdo' ).prop( 'disabled', false );
                 if ( r.success ) {
                     agregarOverlay( 'audio', {
-                        url:     r.data.url,
+                        url:      r.data.url,
                         autoplay: $( '#audio-autoplay' ).is( ':checked' ),
+                        iconColor: $( '#audio-icon-color' ).val() || '#ffffff',
                     }, 5, 5, 8, 9 );
                     cerrarTodosLosModales();
                 } else { alert( 'Error al subir el audio: ' + r.data ); }
@@ -1465,9 +1461,9 @@
        GUARDAR / CARGAR
     ========================================================= */
     function cargarOverlays() {
-        $.post( flipbookAdmin.ajax_url, {
+        $.post( contraplanoFlipbookAdmin.ajax_url, {
             action: 'flipbook_obtener_overlays',
-            nonce:  flipbookAdmin.nonce,
+            nonce:  contraplanoFlipbookAdmin.nonce,
             flipbook_id: estado.flipbookId,
         }, function ( r ) {
             if ( r.success && r.data ) {
@@ -1482,21 +1478,21 @@
             }
         });
 
-        // Cargar configuración de números de página
-        $.post( flipbookAdmin.ajax_url, {
-            action: 'flipbook_cargar_config_numeros',
-            nonce:  flipbookAdmin.nonce,
+        // Cargar configuración de números de página desde la BD
+        $.post( contraplanoFlipbookAdmin.ajax_url, {
+            action:      'flipbook_cargar_config_numeros',
+            nonce:       contraplanoFlipbookAdmin.nonce,
             flipbook_id: estado.flipbookId,
         }, function ( r ) {
             if ( r.success && r.data ) {
-                configNumerosPage.colorNumero    = r.data.colorNumero    || '#666666';
-                configNumerosPage.colorFondo     = r.data.colorFondo     || '#FFFFFF';
-                configNumerosPage.opacidadFondo  = r.data.opacidadFondo  || 0.8;
-                configNumerosPage.posicion       = r.data.posicion       || 'inferior-derecha';
-                configNumerosPage.tamanio        = r.data.tamanio        || 14;
-                configNumerosPage.mostrar        = r.data.mostrar !== false;
+                configNumerosPage.colorNumero   = r.data.colorNumero   || '#666666';
+                configNumerosPage.colorFondo    = r.data.colorFondo    || '#FFFFFF';
+                configNumerosPage.opacidadFondo = r.data.opacidadFondo || 0.8;
+                configNumerosPage.posicion      = r.data.posicion      || 'inferior-derecha';
+                configNumerosPage.tamanio       = r.data.tamanio       || 14;
+                configNumerosPage.mostrar       = r.data.mostrar !== false;
 
-                // Actualizar UI
+                // Sincronizar controles del sidebar con los valores cargados
                 $( '#cfg-mostrar-numeros' ).prop( 'checked', configNumerosPage.mostrar );
                 $( '#cfg-color-numero' ).val( configNumerosPage.colorNumero );
                 $( '#cfg-color-numero-hex' ).text( configNumerosPage.colorNumero );
@@ -1507,6 +1503,9 @@
                 $( '#cfg-posicion' ).val( configNumerosPage.posicion );
                 $( '#cfg-tamanio' ).val( configNumerosPage.tamanio );
                 $( '#cfg-tamanio-val' ).text( configNumerosPage.tamanio );
+
+                // Re-renderizar para mostrar el número con la config cargada
+                if ( estado.pdfDoc ) renderizarPagina( estado.paginaActual );
             }
         });
     }
@@ -1518,25 +1517,25 @@
         const tituloNuevo = $( '#input-titulo' ).val().trim() || 'Flipbook sin título';
 
         // Guardar el título del post en WordPress
-        $.post( flipbookAdmin.ajax_url, {
+        $.post( contraplanoFlipbookAdmin.ajax_url, {
             action:      'flipbook_guardar_titulo',
-            nonce:       flipbookAdmin.nonce,
+            nonce:       contraplanoFlipbookAdmin.nonce,
             flipbook_id: estado.flipbookId,
             titulo:      tituloNuevo,
         });
 
         // Guardar la configuración de números de página
-        $.post( flipbookAdmin.ajax_url, {
+        $.post( contraplanoFlipbookAdmin.ajax_url, {
             action:      'flipbook_guardar_config_numeros',
-            nonce:       flipbookAdmin.nonce,
+            nonce:       contraplanoFlipbookAdmin.nonce,
             flipbook_id: estado.flipbookId,
             config:      JSON.stringify( configNumerosPage ),
         });
 
         // Guardar los overlays
-        $.post( flipbookAdmin.ajax_url, {
+        $.post( contraplanoFlipbookAdmin.ajax_url, {
             action: 'flipbook_guardar_overlays',
-            nonce:  flipbookAdmin.nonce,
+            nonce:  contraplanoFlipbookAdmin.nonce,
             flipbook_id: estado.flipbookId,
             overlays: JSON.stringify( estado.overlays.map( ov => ({
                 id: ov.id, tipo: ov.tipo, pagina: ov.pagina,

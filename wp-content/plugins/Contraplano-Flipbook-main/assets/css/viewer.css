@@ -11,6 +11,8 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     display: flex;
     flex-direction: column;
+    width: 100%;
+    max-width: 100%;
     background: #e5e7eb;
     border-radius: 8px;
     overflow: hidden;
@@ -21,11 +23,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
     gap: 16px;
     background: #1e293b;
     padding: 8px 16px;
     color: #fff;
     font-size: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
 }
 
 /* Botones de la barra de navegación */
@@ -38,6 +44,7 @@
     cursor: pointer;
     font-size: 13px;
     transition: background .15s;
+    white-space: nowrap;
 }
 .flipbook-btn:hover { background: rgba(255,255,255,.25); }
 
@@ -62,11 +69,70 @@
 .flipbook-canvas {
     display: block;
     box-shadow: 0 4px 24px rgba(0,0,0,.3);
-    max-width: 100%;
 }
 
 /* Capa de overlays posicionada sobre el canvas */
 .flipbook-overlays {
     position: absolute;
+    top: 0;
+    left: 0;
     pointer-events: all;
+}
+
+.flipbook-audio-overlay {
+    transition: background .2s ease, border-color .2s ease;
+}
+
+.flipbook-canvas,
+.flipbook-overlays {
+    transform-origin: left center;
+    backface-visibility: hidden;
+}
+
+.flipbook-canvas-wrapper.flipbook-turn-next .flipbook-canvas,
+.flipbook-canvas-wrapper.flipbook-turn-next .flipbook-overlays {
+    animation: flipbookPageTurnNext .45s cubic-bezier(.2,.7,.2,1);
+}
+
+.flipbook-canvas-wrapper.flipbook-turn-prev .flipbook-canvas,
+.flipbook-canvas-wrapper.flipbook-turn-prev .flipbook-overlays {
+    animation: flipbookPageTurnPrev .45s cubic-bezier(.2,.7,.2,1);
+}
+
+@keyframes flipbookPageTurnNext {
+    0%   { transform: perspective(1200px) rotateY(0deg); opacity: 1; }
+    35%  { transform: perspective(1200px) rotateY(-12deg); opacity: .88; }
+    100% { transform: perspective(1200px) rotateY(0deg); opacity: 1; }
+}
+
+@keyframes flipbookPageTurnPrev {
+    0%   { transform: perspective(1200px) rotateY(0deg); opacity: 1; }
+    35%  { transform: perspective(1200px) rotateY(12deg); opacity: .88; }
+    100% { transform: perspective(1200px) rotateY(0deg); opacity: 1; }
+}
+
+@media (max-width: 768px) {
+    .flipbook-contenedor {
+        border-radius: 6px;
+    }
+
+    .flipbook-barra {
+        gap: 8px;
+        padding: 10px 8px;
+    }
+
+    .flipbook-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
+    .flipbook-info-pagina {
+        font-size: 12px;
+        min-width: 120px;
+        text-align: center;
+    }
+
+    .flipbook-canvas-wrapper {
+        padding: 10px;
+    }
 }

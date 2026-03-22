@@ -77,6 +77,13 @@ class Flipbook_Admin {
             'flipbooks_page_flipbook-editor',
         ];
 
+        // Deshabilitar caché de LiteSpeed en todas las páginas del plugin
+        // para evitar que se cachee el nonce y cause errores AJAX
+        if ( str_contains( $hook, 'flipbook' ) ) {
+            header( 'X-LiteSpeed-Cache-Control: no-cache' );
+            do_action( 'litespeed_control_set_nocache', 'flipbook admin page' );
+        }
+
         // La preview tiene su propio hook aunque el parent sea null
         if ( str_contains( $hook, 'flipbook-preview' ) ) {
             // Encolar solo PDF.js y el visor para la página de preview
@@ -146,7 +153,7 @@ class Flipbook_Admin {
             : '';
 
         // Pasar configuración inicial al JavaScript del editor
-        wp_localize_script( 'flipbook-editor', 'flipbookAdmin', [
+        wp_localize_script( 'flipbook-editor', 'contraplanoFlipbookAdmin', [
             'ajax_url'    => admin_url( 'admin-ajax.php' ),
             'nonce'       => wp_create_nonce( 'flipbook_nonce' ),
             'plugin_url'  => FLIPBOOK_URL,
@@ -454,16 +461,16 @@ class Flipbook_Admin {
             $ov['datos'] = json_decode( $ov['datos'], true );
         }
 
-        // Obtener configuración de números de página
+        // Configuración de números de página
         $config_numeros = get_post_meta( $flipbook_id, '_flipbook_config_numeros', true );
-        if ( ! $config_numeros ) {
+        if ( ! $config_numeros || ! is_array( $config_numeros ) ) {
             $config_numeros = [
-                'colorNumero'    => '#666666',
-                'colorFondo'     => '#FFFFFF',
-                'opacidadFondo'  => 0.8,
-                'posicion'       => 'inferior-derecha',
-                'tamanio'        => 14,
-                'mostrar'        => true,
+                'colorNumero'   => '#666666',
+                'colorFondo'    => '#FFFFFF',
+                'opacidadFondo' => 0.8,
+                'posicion'      => 'inferior-derecha',
+                'tamanio'       => 14,
+                'mostrar'       => true,
             ];
         }
 
@@ -564,6 +571,8 @@ body { display: flex; flex-direction: column; }
     background: #fff;
     flex-shrink: 0;
     line-height: 0;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
 }
 .slot canvas { display: block; }
 .ov-layer {
@@ -587,9 +596,76 @@ body { display: flex; flex-direction: column; }
     z-index: 5;
 }
 
-/* ── Animación flip ── */
-@keyframes flip { 0%{opacity:1;transform:perspective(1200px) rotateY(0)} 45%{opacity:.4;transform:perspective(1200px) rotateY(-18deg)} 100%{opacity:1;transform:perspective(1200px) rotateY(0)} }
-.flip-anim { animation: flip .38s ease-in-out; }
+#flip-sombra-movil {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 26%;
+    transform: translateX(-50%);
+    pointer-events: none;
+    opacity: 0;
+    z-index: 8;
+    background: linear-gradient(to right,
+        rgba(0,0,0,0.00) 0%,
+        rgba(0,0,0,0.04) 26%,
+        rgba(0,0,0,0.14) 50%,
+        rgba(0,0,0,0.04) 74%,
+        rgba(0,0,0,0.00) 100%
+    );
+}
+
+.flip-turn-layer {
+    position: absolute;
+    overflow: hidden;
+    background: #fff;
+    pointer-events: none;
+    z-index: 14;
+    backface-visibility: visible;
+    transform-style: preserve-3d;
+}
+
+.flip-turn-face {
+    position: absolute;
+    inset: 0;
+    backface-visibility: hidden;
+}
+
+.flip-turn-front { transform: rotateY(0deg); }
+
+.flip-turn-back {
+    transform: rotateY(180deg);
+    background: #f7f7f7;
+}
+
+.flip-turn-layer canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.flip-turn-back::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(to right,
+            rgba(0,0,0,.10) 0%,
+            rgba(0,0,0,.03) 18%,
+            rgba(255,255,255,.65) 55%,
+            rgba(255,255,255,.2) 100%
+        ),
+        #f6f1e9;
+}
+
+.flip-turn-shadow {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20%;
+    pointer-events: none;
+    opacity: 0;
+}
 
 /* ── Spinner ── */
 #spinner {
@@ -715,6 +791,7 @@ body { display: flex; flex-direction: column; }
     <div id="spread" style="display:none;">
         <div class="slot" id="slot-l"><canvas id="cv-l"></canvas><div class="ov-layer" id="ov-l"></div></div>
         <div id="lomo"></div>
+        <div id="flip-sombra-movil"></div>
         <div class="slot" id="slot-r"><canvas id="cv-r"></canvas><div class="ov-layer" id="ov-r"></div></div>
     </div>
 
@@ -750,14 +827,18 @@ body { display: flex; flex-direction: column; }
 (function () {
     'use strict';
 
-    const PDF_URL      = <?php echo json_encode( $pdf_url   ); ?>;
-    const TOTAL_PAGS   = <?php echo intval( $paginas ); ?>;
-    const OVERLAYS     = <?php echo wp_json_encode( array_values( $overlays ) ); ?>;
-    const CONFIG_NUMEROS = <?php echo wp_json_encode( $config_numeros ); ?>;
+    const PDF_URL    = <?php echo json_encode( $pdf_url   ); ?>;
+    const OVERLAYS   = <?php echo wp_json_encode( array_values( $overlays ) ); ?>;
+    const CONFIG_NUM = <?php echo wp_json_encode( $config_numeros ?? [] ); ?>;
 
-    let pdfDoc   = null;
+    // totalPags se actualiza desde pdf.numPages al cargar — no confiamos en el meta de WP
+    let totalPags = <?php echo intval( $paginas ); ?>;
+    let pdfDoc    = null;
     let pagActual = 1;
     let enRender  = false;
+    // Estado de la animación de volteo
+    let animando  = false;
+    let pendiente = null;   // {n, dir} solicitud pendiente durante animación
 
     // DOM refs
     const spinner   = document.getElementById('spinner');
@@ -769,6 +850,7 @@ body { display: flex; flex-direction: column; }
     const slotL     = document.getElementById('slot-l');
     const slotR     = document.getElementById('slot-r');
     const lomo      = document.getElementById('lomo');
+    const sombraMovil = document.getElementById('flip-sombra-movil');
     const flechaIzq = document.getElementById('flecha-izq');
     const flechaDer = document.getElementById('flecha-der');
     const btnFirst  = document.getElementById('btn-first');
@@ -776,14 +858,22 @@ body { display: flex; flex-direction: column; }
     const btnNext   = document.getElementById('btn-next');
     const btnLast   = document.getElementById('btn-last');
     const inpPag    = document.getElementById('inp-pag');
+    const lblTotal  = document.getElementById('lbl-total');
     const area      = document.getElementById('flipbook-area');
 
     /* ── Cargar PDF.js ── */
     pdfjsLib.GlobalWorkerOptions.workerSrc =
         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-    pdfjsLib.getDocument(PDF_URL).promise.then(pdf => {
-        pdfDoc = pdf;
+    pdfjsLib.getDocument({
+        url:             PDF_URL,
+        withCredentials: false,
+        cMapUrl:         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+        cMapPacked:      true,
+    }).promise.then(pdf => {
+        pdfDoc    = pdf;
+        totalPags = pdf.numPages;
+        lblTotal.textContent = '/ ' + totalPags;
         spinner.style.display = 'none';
         spread.style.display  = 'flex';
         irA(1, false);
@@ -791,37 +881,66 @@ body { display: flex; flex-direction: column; }
         spinner.innerHTML = '<p style="color:#f66;text-align:center;">Error al cargar el PDF.<br>Verifica que el archivo exista.</p>';
     });
 
-    /* ── Calcular escala óptima para el spread ── */
-    async function escalaOptima() {
+    /* ── Calcular escala óptima ── */
+    async function escalaOptima(doblesPaginas) {
         const pag  = await pdfDoc.getPage(1);
         const vp   = pag.getViewport({ scale: 1 });
-
-        // El área ya tiene padding:10px 70px en CSS, así que el espacio real
-        // disponible para el spread es el offsetWidth/Height del área menos ese padding.
-        const areaW = area.offsetWidth  - 140;  // 70px cada lado
-        const areaH = area.offsetHeight - 20;   // 10px arriba y abajo
-
-        // Dividimos el ancho entre 2 porque son dos páginas en paralelo
-        const porAncho = ( areaW / 2 ) / vp.width;
-        const porAlto  = areaH         / vp.height;
-
-        // Tomamos el mínimo para que quepa en cualquier dimensión, con tope de 2.5x
+        const areaW = area.offsetWidth  - 140;
+        const areaH = area.offsetHeight - 20;
+        // Si es portada (página sola), usar todo el ancho; si es spread, dividir entre 2
+        const divisor = doblesPaginas ? 2 : 1;
+        const porAncho = ( areaW / divisor ) / vp.width;
+        const porAlto  = areaH / vp.height;
         return Math.min( porAncho, porAlto, 2.5 );
     }
 
-    /* ── Renderizar spread ── */
-    async function renderSpread(numIzq, animar) {
+    /* ── Decidir si es spread o página sola ── */
+    function esPortada(n) {
+        // Página 1: portada sola
+        // Última página cuando el total es PAR: contraportada sola
+        if (n === 1) return true;
+        if (n === totalPags && totalPags % 2 === 0) return true;
+        return false;
+    }
+
+    /* ── Renderizar spread o página sola ── */
+    async function renderSpread(numIzq, animMode = 'none', dir = 'adelante') {
         if (enRender) return;
         enRender = true;
 
-        const esc    = await escalaOptima();
-        const numDer = numIzq + 1;
+        try {
+            if (animMode === 'normal') {
+                await animarVolteoReal(numIzq, dir);
+            } else if (animMode === 'cover-open' || animMode === 'cover-close') {
+                await animarTransicionPortada(numIzq, animMode);
+            } else {
+                await dibujarSpread(numIzq);
+            }
 
-        // Página izquierda
+            inpPag.value = numIzq;
+            actualizarBotones();
+        } finally {
+            enRender = false;
+
+            if (pendiente) {
+                const p = pendiente;
+                pendiente = null;
+                irA(p.n, true);
+            }
+        }
+    }
+
+    async function dibujarSpread(numIzq) {
+        const portada = esPortada(numIzq);
+        const esc     = await escalaOptima(!portada);
+        const numDer  = numIzq + 1;
+
+        // Portada/contraportada: centrar la única página visible.
+        spread.style.justifyContent = portada ? 'center' : 'flex-start';
+
         await renderPagina(numIzq, cvL, ovL, slotL, esc);
 
-        // Página derecha (si existe)
-        if (numDer <= TOTAL_PAGS) {
+        if (!portada && numDer <= totalPags) {
             slotR.style.display = '';
             lomo.style.display  = '';
             await renderPagina(numDer, cvR, ovR, slotR, esc);
@@ -829,22 +948,178 @@ body { display: flex; flex-direction: column; }
             slotR.style.display = 'none';
             lomo.style.display  = 'none';
         }
+    }
 
-        // Animación
-        if (animar) {
-            spread.classList.remove('flip-anim');
-            void spread.offsetWidth;  // forzar reflow
-            spread.classList.add('flip-anim');
+    /* ── Animación de volteo de hoja (estilo libro) ── */
+    function obtenerSlotAnimacion(dir) {
+        const derechaVisible = slotR.style.display !== 'none';
+        if (dir === 'adelante') return derechaVisible ? slotR : slotL;
+        return slotL;
+    }
+
+    function crearCapaVolteo(dir, slotOverride = null, originOverride = null) {
+        const slot = slotOverride || obtenerSlotAnimacion(dir);
+        const cv = slot.querySelector('canvas');
+        if (!cv || !cv.width || !cv.height) return null;
+
+        const slotRect   = slot.getBoundingClientRect();
+        const spreadRect = spread.getBoundingClientRect();
+
+        const capa = document.createElement('div');
+        capa.className = 'flip-turn-layer';
+        capa.style.left = (slotRect.left - spreadRect.left) + 'px';
+        capa.style.top = (slotRect.top - spreadRect.top) + 'px';
+        capa.style.width = slotRect.width + 'px';
+        capa.style.height = slotRect.height + 'px';
+        capa.style.transformOrigin = originOverride || (dir === 'adelante' ? 'left center' : 'right center');
+        capa.style.transform = 'perspective(2200px) rotateY(0deg)';
+
+        const front = document.createElement('div');
+        front.className = 'flip-turn-face flip-turn-front';
+        const frontCanvas = document.createElement('canvas');
+        frontCanvas.width = cv.width;
+        frontCanvas.height = cv.height;
+        const fctx = frontCanvas.getContext('2d');
+        if (!fctx) return null;
+        fctx.drawImage(cv, 0, 0);
+        front.appendChild(frontCanvas);
+
+        const back = document.createElement('div');
+        back.className = 'flip-turn-face flip-turn-back';
+
+        capa.appendChild(front);
+        capa.appendChild(back);
+
+        const sh = document.createElement('div');
+        sh.className = 'flip-turn-shadow';
+        if (dir === 'adelante') {
+            sh.style.left = '0';
+            sh.style.background = 'linear-gradient(to right, rgba(0,0,0,.28), rgba(0,0,0,0))';
+        } else {
+            sh.style.right = '0';
+            sh.style.background = 'linear-gradient(to left, rgba(0,0,0,.28), rgba(0,0,0,0))';
         }
+        capa.appendChild(sh);
 
-        inpPag.value = numIzq;
-        actualizarBotones();
-        enRender = false;
+        spread.appendChild(capa);
+        return { capa, shadow: sh };
+    }
+
+    async function animarTransicionPortada(numIzq, mode) {
+        const sourceSlot = slotL;
+        const sourceRect = sourceSlot.getBoundingClientRect();
+
+        const origin = mode === 'cover-open' ? 'left center' : 'right center';
+        const layer = crearCapaVolteo(
+            mode === 'cover-open' ? 'adelante' : 'atras',
+            sourceSlot,
+            origin
+        );
+
+        await dibujarSpread(numIzq);
+
+        if (!layer) return;
+
+        const { capa, shadow } = layer;
+        const targetRect = slotL.getBoundingClientRect();
+        const dx = ( targetRect.left - sourceRect.left );
+        const dy = ( targetRect.top  - sourceRect.top );
+        const finRot = mode === 'cover-open' ? -170 : 170;
+
+        return new Promise(resolve => {
+            animando = true;
+
+            if ( mode === 'cover-open' ) {
+                slotR.style.transition = 'none';
+                slotR.style.opacity = '0';
+                slotR.style.transform = 'translateX(26px)';
+                lomo.style.transition = 'none';
+                lomo.style.opacity = '0.15';
+            }
+
+            sombraMovil.style.transition = 'opacity 1.65s ease-in-out, transform 1.65s ease-in-out';
+            sombraMovil.style.opacity = '0.34';
+            sombraMovil.style.transform = `translateX(-50%) translateX(${mode === 'cover-open' ? '-3%' : '3%'})`;
+
+            // Trigger transition
+            void capa.offsetWidth;
+            if ( mode === 'cover-open' ) void slotR.offsetWidth;
+
+            capa.style.transition = 'transform 1.65s ease-in-out, box-shadow 1.65s ease-in-out';
+            shadow.style.transition = 'opacity 1.2s ease-in-out';
+            capa.style.transform = `translate(${dx}px, ${dy}px) perspective(2200px) rotateY(${finRot}deg)`;
+            capa.style.boxShadow = mode === 'cover-open'
+                ? '-14px 0 20px rgba(0,0,0,.22)'
+                : '14px 0 20px rgba(0,0,0,.22)';
+            shadow.style.opacity = '0.5';
+
+            if ( mode === 'cover-open' ) {
+                slotR.style.transition = 'opacity 1.28s ease, transform 1.28s ease';
+                slotR.style.opacity = '1';
+                slotR.style.transform = 'translateX(0)';
+
+                lomo.style.transition = 'opacity 1.28s ease';
+                lomo.style.opacity = '1';
+            }
+
+            setTimeout(() => {
+                if (capa.parentNode) capa.parentNode.removeChild(capa);
+                sombraMovil.style.opacity = '0';
+                sombraMovil.style.transform = 'translateX(-50%) translateX(0)';
+                slotR.style.transition = '';
+                slotR.style.opacity = '';
+                slotR.style.transform = '';
+                lomo.style.transition = '';
+                lomo.style.opacity = '';
+                animando = false;
+                resolve();
+            }, 1720);
+        });
+    }
+
+    async function animarVolteoReal(numIzq, dir) {
+        const layer = crearCapaVolteo(dir);
+
+        // Renderizar nuevo spread por debajo de la hoja que gira
+        await dibujarSpread(numIzq);
+
+        if (!layer) return;
+
+        const { capa, shadow } = layer;
+
+        return new Promise(resolve => {
+            animando = true;
+
+            const finRot = dir === 'adelante' ? -168 : 168;
+
+            sombraMovil.style.transition = 'opacity 1.65s ease-in-out, transform 1.65s ease-in-out';
+            sombraMovil.style.opacity = '0.34';
+            sombraMovil.style.transform = `translateX(-50%) translateX(${dir === 'adelante' ? '-3%' : '3%'})`;
+
+            // Trigger transition
+            void capa.offsetWidth;
+
+            capa.style.transition = 'transform 1.65s ease-in-out, box-shadow 1.65s ease-in-out';
+            shadow.style.transition = 'opacity 1.2s ease-in-out';
+            capa.style.transform = `perspective(2200px) rotateY(${finRot}deg)`;
+            capa.style.boxShadow = dir === 'adelante'
+                ? '-14px 0 20px rgba(0,0,0,.22)'
+                : '14px 0 20px rgba(0,0,0,.22)';
+            shadow.style.opacity = '0.5';
+
+            setTimeout(() => {
+                if (capa.parentNode) capa.parentNode.removeChild(capa);
+            sombraMovil.style.opacity = '0';
+            sombraMovil.style.transform = 'translateX(-50%) translateX(0)';
+                animando = false;
+                resolve();
+            }, 1720);
+        });
     }
 
     /* ── Renderizar una página en un canvas ── */
     async function renderPagina(num, cv, ovLayer, slot, esc) {
-        if (num < 1 || num > TOTAL_PAGS) return;
+        if (num < 1 || num > totalPags) return;
         const pag = await pdfDoc.getPage(num);
         const vp  = pag.getViewport({ scale: esc });
 
@@ -854,9 +1129,11 @@ body { display: flex; flex-direction: column; }
         slot.style.height = vp.height + 'px';
 
         await pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-        
-        // Dibujar número de página
-        dibujarNumeroPagina(cv, num, TOTAL_PAGS);
+
+        // Dibujar número de página si está configurado
+        if (CONFIG_NUM && CONFIG_NUM.mostrar !== false) {
+            dibujarNumPag(cv, num, totalPags, CONFIG_NUM);
+        }
 
         // Overlays de esta página
         ovLayer.innerHTML = '';
@@ -871,102 +1148,41 @@ body { display: flex; flex-direction: column; }
             });
     }
 
-    function dibujarNumeroPagina(canvas, paginaActual, totalPaginas) {
-        if (!CONFIG_NUMEROS.mostrar) return;
-
+    /* ── Número de página ── */
+    function dibujarNumPag(canvas, pagActual, totalPags, cfg) {
+        if (!cfg || !cfg.mostrar) return;
         const ctx = canvas.getContext('2d');
-        const padding = 15;
-        const fontSize = Math.max(CONFIG_NUMEROS.tamanio, canvas.width * 0.015);
-        const texto = paginaActual + ' / ' + totalPaginas;
-
-        // Configurar fuente
-        ctx.font = 'bold ' + fontSize + 'px Arial, sans-serif';
-        ctx.fillStyle = CONFIG_NUMEROS.colorNumero;
+        const pad = 15;
+        const fs  = Math.max(cfg.tamanio || 14, canvas.width * 0.015);
+        const txt = pagActual + ' / ' + totalPags;
+        ctx.font = 'bold ' + fs + 'px Arial,sans-serif';
         ctx.textBaseline = 'bottom';
-
-        // Medir ancho del texto para agregar fondo
-        const metrics = ctx.measureText(texto);
-        const textWidth = metrics.width;
-        const textHeight = fontSize + 4;
-
-        // Calcular posición según configuración
+        const pos = cfg.posicion || 'inferior-derecha';
         let x, y;
-        const posicion = CONFIG_NUMEROS.posicion;
-
-        if (posicion === 'inferior-derecha') {
-            ctx.textAlign = 'right';
-            x = canvas.width - padding;
-            y = canvas.height - padding;
-        } else if (posicion === 'inferior-izquierda') {
-            ctx.textAlign = 'left';
-            x = padding;
-            y = canvas.height - padding;
-        } else if (posicion === 'inferior-centro') {
-            ctx.textAlign = 'center';
-            x = canvas.width / 2;
-            y = canvas.height - padding;
-        } else if (posicion === 'superior-derecha') {
-            ctx.textAlign = 'right';
-            x = canvas.width - padding;
-            y = padding + fontSize;
-        } else if (posicion === 'superior-izquierda') {
-            ctx.textAlign = 'left';
-            x = padding;
-            y = padding + fontSize;
-        } else if (posicion === 'superior-centro') {
-            ctx.textAlign = 'center';
-            x = canvas.width / 2;
-            y = padding + fontSize;
-        } else if (posicion === 'centro') {
-            ctx.textAlign = 'center';
-            x = canvas.width / 2;
-            y = (canvas.height / 2) + (fontSize / 2);
-        }
-
-        // Calcular posición del fondo
-        let bgX, bgY, bgWidth = textWidth + 8, bgHeight = textHeight + 4;
-
-        if (posicion === 'inferior-derecha') {
-            bgX = canvas.width - textWidth - padding - 4;
-            bgY = canvas.height - textHeight - padding;
-        } else if (posicion === 'inferior-izquierda') {
-            bgX = padding - 4;
-            bgY = canvas.height - textHeight - padding;
-        } else if (posicion === 'inferior-centro') {
-            bgX = (canvas.width / 2) - (bgWidth / 2);
-            bgY = canvas.height - textHeight - padding;
-        } else if (posicion === 'superior-derecha') {
-            bgX = canvas.width - textWidth - padding - 4;
-            bgY = padding - 4;
-        } else if (posicion === 'superior-izquierda') {
-            bgX = padding - 4;
-            bgY = padding - 4;
-        } else if (posicion === 'superior-centro') {
-            bgX = (canvas.width / 2) - (bgWidth / 2);
-            bgY = padding - 4;
-        } else if (posicion === 'centro') {
-            bgX = (canvas.width / 2) - (bgWidth / 2);
-            bgY = (canvas.height / 2) - (bgHeight / 2);
-        }
-
-        // Dibujar fondo semi-transparente
-        const rgbColor = hexToRgb(CONFIG_NUMEROS.colorFondo);
-        ctx.fillStyle = 'rgba(' + rgbColor.r + ', ' + rgbColor.g + ', ' + rgbColor.b + ', ' + CONFIG_NUMEROS.opacidadFondo + ')';
-        ctx.fillRect(bgX, bgY, bgWidth, bgHeight);
-
-        // Dibujar texto
-        ctx.fillStyle = CONFIG_NUMEROS.colorNumero;
-        ctx.fillText(texto, x, y);
+        if      (pos==='inferior-derecha'  ) { ctx.textAlign='right';  x=canvas.width-pad;  y=canvas.height-pad; }
+        else if (pos==='inferior-izquierda') { ctx.textAlign='left';   x=pad;               y=canvas.height-pad; }
+        else if (pos==='inferior-centro'   ) { ctx.textAlign='center'; x=canvas.width/2;    y=canvas.height-pad; }
+        else if (pos==='superior-derecha'  ) { ctx.textAlign='right';  x=canvas.width-pad;  y=pad+fs; }
+        else if (pos==='superior-izquierda') { ctx.textAlign='left';   x=pad;               y=pad+fs; }
+        else if (pos==='superior-centro'   ) { ctx.textAlign='center'; x=canvas.width/2;    y=pad+fs; }
+        else                                 { ctx.textAlign='center'; x=canvas.width/2;    y=canvas.height/2+fs/2; }
+        const mw = ctx.measureText(txt).width;
+        const mh = fs + 4;
+        let bx, by;
+        if      (pos==='inferior-derecha'  ) { bx=canvas.width-mw-pad-4; by=canvas.height-mh-pad; }
+        else if (pos==='inferior-izquierda') { bx=pad-4;                  by=canvas.height-mh-pad; }
+        else if (pos==='inferior-centro'   ) { bx=canvas.width/2-mw/2-4; by=canvas.height-mh-pad; }
+        else if (pos==='superior-derecha'  ) { bx=canvas.width-mw-pad-4; by=pad-4; }
+        else if (pos==='superior-izquierda') { bx=pad-4;                  by=pad-4; }
+        else if (pos==='superior-centro'   ) { bx=canvas.width/2-mw/2-4; by=pad-4; }
+        else                                 { bx=canvas.width/2-mw/2-4; by=canvas.height/2-mh/2; }
+        const rgb = hexRgb(cfg.colorFondo||'#FFFFFF');
+        ctx.fillStyle = 'rgba('+rgb.r+','+rgb.g+','+rgb.b+','+(cfg.opacidadFondo||0.8)+')';
+        ctx.fillRect(bx, by, mw+8, mh+4);
+        ctx.fillStyle = cfg.colorNumero || '#666666';
+        ctx.fillText(txt, x, y);
     }
-
-    function hexToRgb(hex) {
-        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-        return result ? {
-            r: parseInt(result[1], 16),
-            g: parseInt(result[2], 16),
-            b: parseInt(result[3], 16)
-        } : {r: 102, g: 102, b: 102};
-    }
+    function hexRgb(h){const r=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);return r?{r:parseInt(r[1],16),g:parseInt(r[2],16),b:parseInt(r[3],16)}:{r:102,g:102,b:102};}
 
     /* ── Crear overlay ── */
     function crearOverlay(ov, W, H) {
@@ -974,53 +1190,56 @@ body { display: flex; flex-direction: column; }
         const top   = (parseFloat(ov.pos_top ) / 100) * H;
         const ancho = (parseFloat(ov.ancho    ) / 100) * W;
         const alto  = (parseFloat(ov.alto     ) / 100) * H;
+
+        if (ancho < 1 || alto < 1) return null;
+
         const wrap  = document.createElement('div');
         wrap.style.cssText =
             `position:absolute;left:${left}px;top:${top}px;`
-          + `width:${ancho}px;height:${alto}px;overflow:hidden;border-radius:4px;`;
-        const d = ov.datos || {};
+          + `width:${ancho}px;height:${alto}px;overflow:hidden;border-radius:4px;z-index:10;`;
+
+        // datos puede llegar como string JSON en algunos casos — parsear si es necesario
+        let d = ov.datos || {};
+        if (typeof d === 'string') {
+            try { d = JSON.parse(d); } catch(e) { d = {}; }
+        }
+
         switch (ov.tipo) {
             case 'youtube':      ytOverlay   (wrap, d); break;
             case 'imagen':       imgOverlay  (wrap, d); break;
             case 'presentacion': slideOverlay(wrap, d); break;
             case 'audio':        audioOverlay(wrap, d); break;
-            case 'link':         linkOverlay (wrap, d, alto, ancho); break;
+            case 'link':         linkOverlay (wrap, d); break;
             default: return null;
         }
         return wrap;
     }
 
+    /* YouTube — siempre embed en su cuadrado, sin abrir popup */
     function ytOverlay(wrap, d) {
-        if (d.modo === 'popup') {
-            const thumb = `https://img.youtube.com/vi/${d.videoId}/hqdefault.jpg`;
-            wrap.style.cursor = 'pointer';
-            wrap.innerHTML = `<div style="position:relative;width:100%;height:100%;background:#000;"><img src="${thumb}" style="width:100%;height:100%;object-fit:cover;opacity:.85;"/><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><div style="width:50px;height:50px;background:rgba(0,0,0,.7);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;">▶</div></div></div>`;
-            wrap.onclick = () => abrirPopupYT(d);
-        } else {
-            const p = new URLSearchParams({autoplay:d.autoplay||0,controls:d.controles!==undefined?d.controles:1,mute:d.silencio||0,loop:d.loop||0,start:d.inicio||0,playlist:d.videoId});
-            const iframe = document.createElement('iframe');
-            iframe.src = `https://www.youtube.com/embed/${d.videoId}?${p}`;
-            iframe.style.cssText = 'width:100%;height:100%;border:none;';
-            iframe.allow = 'accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture';
-            iframe.allowFullscreen = true;
-            wrap.appendChild(iframe);
-        }
+        const p = new URLSearchParams({
+            autoplay:  d.autoplay  || 0,
+            controls:  d.controles !== undefined ? d.controles : 1,
+            mute:      d.silencio  || 0,
+            loop:      d.loop      || 0,
+            start:     d.inicio    || 0,
+            playlist:  d.videoId,
+        });
+        const iframe = document.createElement('iframe');
+        iframe.src   = `https://www.youtube.com/embed/${d.videoId}?${p}`;
+        iframe.style.cssText   = 'width:100%;height:100%;border:none;';
+        iframe.allow           = 'accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture';
+        iframe.allowFullscreen = true;
+        wrap.appendChild(iframe);
     }
-    function abrirPopupYT(d) {
-        const modal = document.createElement('div');
-        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;';
-        const p = new URLSearchParams({autoplay:1,controls:d.controles!==undefined?d.controles:1,mute:d.silencio||0,loop:d.loop||0,start:d.inicio||0,playlist:d.videoId});
-        modal.innerHTML = `<div style="position:relative;width:90vw;max-width:800px;"><button style="position:absolute;top:-42px;right:0;background:none;border:none;color:#fff;font-size:30px;cursor:pointer;">✕</button><div style="position:relative;padding-bottom:56.25%;height:0;"><iframe src="https://www.youtube.com/embed/${d.videoId}?${p}" style="position:absolute;inset:0;width:100%;height:100%;border:none;" allowfullscreen></iframe></div></div>`;
-        modal.querySelector('button').onclick = () => document.body.removeChild(modal);
-        modal.onclick = e => { if (e.target === modal) document.body.removeChild(modal); };
-        document.body.appendChild(modal);
-    }
+
     function imgOverlay(wrap, d) {
         const img = document.createElement('img');
         img.src = d.url || '';
         img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
         wrap.appendChild(img);
     }
+
     function slideOverlay(wrap, d) {
         const imgs = d.imagenes || []; if (!imgs.length) return;
         wrap.style.position = 'relative';
@@ -1034,56 +1253,174 @@ body { display: flex; flex-direction: column; }
             inner.appendChild(s);
         });
         wrap.appendChild(inner);
-        function mostrar(n) { const t = lista.length; idx = d.loop ? (((n%t)+t)%t) : Math.max(0,Math.min(n,t-1)); Array.from(inner.children).forEach((s,i)=>{s.style.opacity=i===idx?'1':'0';}); }
+        function mostrar(n) { const t=lista.length; idx=d.loop?(((n%t)+t)%t):Math.max(0,Math.min(n,t-1)); Array.from(inner.children).forEach((s,i)=>{s.style.opacity=i===idx?'1':'0';}); }
         if (d.autoplay) timer = setInterval(() => mostrar(idx+1), dur);
         if (d.flechas) {
-            const bs = 'position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;z-index:10;display:flex;align-items:center;justify-content:center;';
-            const bp = document.createElement('button'); bp.style.cssText = bs+'left:4px;'; bp.innerHTML = '‹';
-            const bn = document.createElement('button'); bn.style.cssText = bs+'right:4px;'; bn.innerHTML = '›';
-            bp.onclick = () => { if(timer) clearInterval(timer); mostrar(idx-1); };
-            bn.onclick = () => { if(timer) clearInterval(timer); mostrar(idx+1); };
+            const bs='position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;z-index:10;display:flex;align-items:center;justify-content:center;';
+            const bp=document.createElement('button'); bp.style.cssText=bs+'left:4px;'; bp.innerHTML='‹';
+            const bn=document.createElement('button'); bn.style.cssText=bs+'right:4px;'; bn.innerHTML='›';
+            bp.onclick=()=>{if(timer)clearInterval(timer);mostrar(idx-1);}; bn.onclick=()=>{if(timer)clearInterval(timer);mostrar(idx+1);};
             wrap.appendChild(bp); wrap.appendChild(bn);
         }
     }
+
     function audioOverlay(wrap, d) {
-        wrap.style.cssText = 'background:#C70000;display:flex;align-items:center;justify-content:center;cursor:pointer;border-radius:6px;';
-        const audio = document.createElement('audio'); audio.src = d.url||''; audio.preload='auto'; if(d.autoplay) audio.autoplay=true;
-        const svg = document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('viewBox','0 0 24 24'); svg.setAttribute('fill','white'); svg.setAttribute('width','45%'); svg.setAttribute('height','45%');
-        svg.innerHTML = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>';
-        let playing = !!d.autoplay; wrap.appendChild(audio); wrap.appendChild(svg);
-        wrap.onclick = () => { if(playing){audio.pause();wrap.style.background='#C70000';}else{audio.play();wrap.style.background='#9B0000';} playing=!playing; };
-        audio.addEventListener('ended',()=>{ playing=false; wrap.style.background='#C70000'; });
+        const playPath  = 'M8 5v14l11-7z';
+        const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
+
+        // NO sobreescribir wrap.style.cssText — ya tiene position/left/top/width/height
+        // Solo agregar los estilos adicionales del audio
+        wrap.style.background   = '#C70000';
+        wrap.style.display      = 'flex';
+        wrap.style.alignItems   = 'center';
+        wrap.style.justifyContent = 'center';
+        wrap.style.cursor       = 'pointer';
+        wrap.style.borderRadius = '6px';
+
+        const audio = document.createElement('audio');
+        audio.src     = d.url || '';
+        audio.preload = 'auto';
+        if (d.autoplay) audio.autoplay = true;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'white');
+        // Tamaño relativo al contenedor, no fijo
+        svg.style.cssText = 'width:60%;height:60%;max-width:48px;max-height:48px;pointer-events:none;';
+        svg.innerHTML = `<path d="${playPath}"/>`;
+
+        let playing = !!d.autoplay;
+        wrap.appendChild(audio);
+        wrap.appendChild(svg);
+
+        wrap.onclick = () => {
+            if (playing) {
+                audio.pause();
+                wrap.style.background = '#C70000';
+                svg.innerHTML = `<path d="${playPath}"/>`;
+            } else {
+                audio.play();
+                wrap.style.background = '#9B0000';
+                svg.innerHTML = `<path d="${pausePath}"/>`;
+            }
+            playing = !playing;
+        };
+        audio.addEventListener('ended', () => {
+            playing = false;
+            wrap.style.background = '#C70000';
+            svg.innerHTML = `<path d="${playPath}"/>`;
+        });
     }
+
+    /* Link — navega dentro del visor o abre URL */
     function linkOverlay(wrap, d) {
         const href = d.href || '';
+        wrap.style.cursor = 'pointer';
+
         if (href.startsWith('pagina:')) {
-            const n = parseInt(href.replace('pagina:',''));
-            wrap.style.cursor = 'pointer'; wrap.title = d.titulo||'Ir a página '+n;
-            wrap.onclick = () => irA(n);
-        } else {
-            const a = document.createElement('a'); a.href=href; a.title=d.titulo||href;
-            a.style.cssText='display:flex;align-items:center;justify-content:center;width:100%;height:100%;text-decoration:none;';
-            if (d.nuevaPestana && !href.startsWith('mailto:') && !href.startsWith('tel:')) { a.target='_blank'; a.rel='noopener noreferrer'; }
+            const n = parseInt(href.replace('pagina:', ''));
+            wrap.title = d.titulo || ('Ir a página ' + n);
+
+            // Fondo semitransparente con flecha para que sea visible
+            wrap.style.background   = 'rgba(26,111,207,0.18)';
+            wrap.style.border       = '2px solid rgba(26,111,207,0.5)';
+            wrap.style.borderRadius = '6px';
+            wrap.style.display      = 'flex';
+            wrap.style.alignItems   = 'center';
+            wrap.style.justifyContent = 'center';
+            wrap.style.transition   = 'background 0.2s';
+
+            // Ícono de flecha hacia la página
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('fill', 'rgba(26,111,207,0.9)');
+            svg.style.cssText = 'width:50%;height:50%;max-width:36px;max-height:36px;pointer-events:none;';
+            svg.innerHTML = '<path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>';
+            wrap.appendChild(svg);
+
+            wrap.onmouseenter = () => wrap.style.background = 'rgba(26,111,207,0.32)';
+            wrap.onmouseleave = () => wrap.style.background = 'rgba(26,111,207,0.18)';
+            wrap.onclick = (e) => { e.stopPropagation(); irA(n); };
+
+        } else if (href) {
+            const a = document.createElement('a');
+            a.href  = href;
+            a.title = d.titulo || href;
+            a.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;text-decoration:none;';
+            if (d.nuevaPestana && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+                a.target = '_blank'; a.rel = 'noopener noreferrer';
+            }
             wrap.appendChild(a);
+
+            // Mostrar ícono si tiene uno
+            if (d.icono && d.icono !== 'ninguno') {
+                const paths = {
+                    mas:     'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z',
+                    check:   'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14l-4-4 1.41-1.41L10 13.17l6.59-6.59L18 8l-8 8z',
+                    info:    'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
+                    pregunta:'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z',
+                    carrito: 'M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96C5 16.1 6.1 17 7 17h11v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63H19c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1 1 0 0023.25 4H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z',
+                };
+                if (paths[d.icono]) {
+                    const color = d.color || '#1a6fcf';
+                    const svgI  = document.createElementNS('http://www.w3.org/2000/svg','svg');
+                    svgI.setAttribute('viewBox','0 0 24 24'); svgI.setAttribute('fill',color);
+                    svgI.style.cssText = 'width:55%;height:55%;max-width:40px;max-height:40px;pointer-events:none;';
+                    svgI.innerHTML = `<path d="${paths[d.icono]}"/>`;
+                    a.appendChild(svgI);
+                }
+            }
         }
     }
-    function mezclar(arr) { for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];} return arr; }
+
+    function mezclar(arr){for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}return arr;}
 
     /* ── Navegación ── */
+    // Lógica de páginas igual a Paperturn:
+    // - Página 1: portada sola
+    // - Páginas 2-3, 4-5, 6-7...: spreads dobles
+    // - Última página si total es par: contraportada sola
+    //
+    // paginaIzquierda(n) = la página izquierda del spread que contiene la página n
+    function paginaIzquierda(n) {
+        if (n <= 1) return 1;               // portada
+        if (n % 2 === 0) return n;          // página par → ya es izquierda del spread
+        return n - 1;                       // página impar → izquierda es n-1
+    }
+
     function irA(n, animar = true) {
         if (!pdfDoc) return;
-        // Asegurar página impar (izquierda del spread), excepto la 1
         if (n < 1) n = 1;
-        if (n > TOTAL_PAGS) n = TOTAL_PAGS;
-        if (n > 1 && n % 2 === 0) n--;  // ajustar a impar
+        if (n > totalPags) n = totalPags;
+        n = paginaIzquierda(n);
+
+        if (enRender || animando) {
+            pendiente = { n };
+            return;
+        }
+
         const anterior = pagActual;
+        let animMode = 'none';
+        if ( animar && n !== anterior ) {
+            if ( anterior === 1 && n === 2 ) {
+                animMode = 'cover-open';
+            } else if ( anterior === 2 && n === 1 ) {
+                // Volver a portada sin animación evita una "tapa" invertida artificial.
+                animMode = 'none';
+            } else if ( !esPortada( anterior ) && !esPortada( n ) ) {
+                animMode = 'normal';
+            }
+        }
+
         pagActual = n;
-        renderSpread(n, animar && n !== anterior);
+        renderSpread(n, animMode, n > anterior ? 'adelante' : 'atras');
     }
 
     function actualizarBotones() {
         const inicio = pagActual <= 1;
-        const fin    = pagActual >= TOTAL_PAGS - 1;
+        // Fin: estamos en el último spread (página izquierda del último spread)
+        const ultimaIzq = paginaIzquierda(totalPags);
+        const fin = pagActual >= ultimaIzq;
         flechaIzq.disabled = inicio;
         flechaDer.disabled = fin;
         btnFirst.disabled  = inicio;
@@ -1093,21 +1430,31 @@ body { display: flex; flex-direction: column; }
         inpPag.value = pagActual;
     }
 
-    flechaIzq.onclick = () => irA(pagActual - 2);
-    flechaDer.onclick = () => irA(pagActual + 2);
+    // Navegación: desde portada (1) el siguiente es página 2; desde spread 2-3 el siguiente es 4, etc.
+    function paginaSiguiente() {
+        if (pagActual === 1) return 2;      // portada → primer spread
+        return pagActual + 2;               // spread → spread siguiente
+    }
+    function paginaAnterior() {
+        if (pagActual <= 2) return 1;       // primer spread o portada → portada
+        return pagActual - 2;              // spread → spread anterior
+    }
+
+    flechaIzq.onclick = () => irA(paginaAnterior());
+    flechaDer.onclick = () => irA(paginaSiguiente());
     btnFirst.onclick  = () => irA(1);
-    btnLast.onclick   = () => irA(TOTAL_PAGS);
-    btnPrev.onclick   = () => irA(pagActual - 2);
-    btnNext.onclick   = () => irA(pagActual + 2);
+    btnLast.onclick   = () => irA(totalPags);
+    btnPrev.onclick   = () => irA(paginaAnterior());
+    btnNext.onclick   = () => irA(paginaSiguiente());
 
     inpPag.addEventListener('change', () => { const n=parseInt(inpPag.value); if(!isNaN(n)) irA(n); });
     inpPag.addEventListener('keypress', e => { if(e.key==='Enter'){const n=parseInt(inpPag.value);if(!isNaN(n))irA(n);} });
 
     document.addEventListener('keydown', e => {
-        if (e.key==='ArrowLeft')  irA(pagActual - 2);
-        if (e.key==='ArrowRight') irA(pagActual + 2);
+        if (e.key==='ArrowLeft')  irA(paginaAnterior());
+        if (e.key==='ArrowRight') irA(paginaSiguiente());
         if (e.key==='Home')       irA(1);
-        if (e.key==='End')        irA(TOTAL_PAGS);
+        if (e.key==='End')        irA(totalPags);
     });
 
     /* ── Pantalla completa ── */

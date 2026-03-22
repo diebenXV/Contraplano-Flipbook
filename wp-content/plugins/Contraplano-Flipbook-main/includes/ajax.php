@@ -17,6 +17,80 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class Flipbook_Ajax {
 
     /**
+     * Guarda la configuración de números de página en los metadatos del flipbook.
+     * Acción: flipbook_guardar_config_numeros
+     */
+    public static function guardar_config_numeros() {
+        check_ajax_referer( 'flipbook_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( 'No tienes permiso para realizar esta acción.' );
+        }
+
+        $flipbook_id = intval( $_POST['flipbook_id'] ?? 0 );
+        $config      = json_decode( stripslashes( $_POST['config'] ?? '{}' ), true );
+
+        if ( ! $flipbook_id || ! is_array( $config ) ) {
+            wp_send_json_error( 'Datos inválidos.' );
+        }
+
+        // Sanitizar y validar cada campo de la configuración
+        $posiciones_validas = [
+            'inferior-derecha', 'inferior-izquierda', 'inferior-centro',
+            'superior-derecha', 'superior-izquierda', 'superior-centro', 'centro',
+        ];
+
+        $config_limpia = [
+            'colorNumero'   => sanitize_hex_color( $config['colorNumero']  ?? '#666666' ) ?: '#666666',
+            'colorFondo'    => sanitize_hex_color( $config['colorFondo']   ?? '#FFFFFF' ) ?: '#FFFFFF',
+            'opacidadFondo' => floatval( $config['opacidadFondo'] ?? 0.8 ),
+            'posicion'      => in_array( $config['posicion'] ?? 'inferior-derecha', $posiciones_validas )
+                                ? $config['posicion'] : 'inferior-derecha',
+            'tamanio'       => intval( $config['tamanio'] ?? 14 ),
+            'mostrar'       => (bool) ( $config['mostrar'] ?? true ),
+        ];
+
+        update_post_meta( $flipbook_id, '_flipbook_config_numeros', $config_limpia );
+
+        wp_send_json_success( 'Configuración de números guardada.' );
+    }
+
+    /**
+     * Recupera la configuración de números de página del flipbook.
+     * Retorna valores por defecto si no existe configuración guardada.
+     * Acción: flipbook_cargar_config_numeros
+     */
+    public static function cargar_config_numeros() {
+        check_ajax_referer( 'flipbook_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( 'No tienes permiso para realizar esta acción.' );
+        }
+
+        $flipbook_id = intval( $_POST['flipbook_id'] ?? 0 );
+
+        if ( ! $flipbook_id ) {
+            wp_send_json_error( 'ID de flipbook inválido.' );
+        }
+
+        $config = get_post_meta( $flipbook_id, '_flipbook_config_numeros', true );
+
+        // Si no hay configuración guardada, devolver valores por defecto
+        if ( ! $config || ! is_array( $config ) ) {
+            $config = [
+                'colorNumero'   => '#666666',
+                'colorFondo'    => '#FFFFFF',
+                'opacidadFondo' => 0.8,
+                'posicion'      => 'inferior-derecha',
+                'tamanio'       => 14,
+                'mostrar'       => true,
+            ];
+        }
+
+        wp_send_json_success( $config );
+    }
+
+    /**
      * Actualiza solo el título del post flipbook.
      * Se llama desde el botón "Guardar cambios" del editor
      * para que el nombre se refleje en el listado de flipbooks.
@@ -426,74 +500,5 @@ class Flipbook_Ajax {
         if ( $bytes >= 1048576 ) return round( $bytes / 1048576, 2 ) . ' MB';
         if ( $bytes >= 1024 )    return round( $bytes / 1024,    2 ) . ' KB';
         return $bytes . ' B';
-    }
-
-    /**
-     * Guarda la configuración de números de página en los metadatos del flipbook.
-     * Acción: flipbook_guardar_config_numeros
-     */
-    public static function guardar_config_numeros() {
-        check_ajax_referer( 'flipbook_nonce', 'nonce' );
-
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( 'No tienes permiso para realizar esta acción.' );
-        }
-
-        $flipbook_id = intval( $_POST['flipbook_id'] ?? 0 );
-        $config = json_decode( stripslashes( $_POST['config'] ?? '{}' ), true );
-
-        if ( ! $flipbook_id || ! is_array( $config ) ) {
-            wp_send_json_error( 'Datos inválidos.' );
-        }
-
-        // Validar y sanitizar la configuración
-        $config_limpia = [
-            'colorNumero'    => sanitize_hex_color( $config['colorNumero'] ?? '#666666' ),
-            'colorFondo'     => sanitize_hex_color( $config['colorFondo'] ?? '#FFFFFF' ),
-            'opacidadFondo'  => floatval( $config['opacidadFondo'] ?? 0.8 ),
-            'posicion'       => in_array( $config['posicion'] ?? 'inferior-derecha', 
-                ['inferior-derecha', 'inferior-izquierda', 'inferior-centro', 'superior-derecha', 'superior-izquierda', 'superior-centro', 'centro'] ) 
-                ? $config['posicion'] : 'inferior-derecha',
-            'tamanio'        => intval( $config['tamanio'] ?? 14 ),
-            'mostrar'        => (bool) ( $config['mostrar'] ?? true ),
-        ];
-
-        update_post_meta( $flipbook_id, '_flipbook_config_numeros', $config_limpia );
-
-        wp_send_json_success( 'Configuración de números guardada.' );
-    }
-
-    /**
-     * Recupera la configuración de números de página del flipbook.
-     * Acción: flipbook_cargar_config_numeros
-     */
-    public static function cargar_config_numeros() {
-        check_ajax_referer( 'flipbook_nonce', 'nonce' );
-
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( 'No tienes permiso para realizar esta acción.' );
-        }
-
-        $flipbook_id = intval( $_POST['flipbook_id'] ?? 0 );
-
-        if ( ! $flipbook_id ) {
-            wp_send_json_error( 'ID de flipbook inválido.' );
-        }
-
-        $config = get_post_meta( $flipbook_id, '_flipbook_config_numeros', true );
-
-        if ( ! $config ) {
-            // Devolver configuración por defecto si no existe
-            $config = [
-                'colorNumero'    => '#666666',
-                'colorFondo'     => '#FFFFFF',
-                'opacidadFondo'  => 0.8,
-                'posicion'       => 'inferior-derecha',
-                'tamanio'        => 14,
-                'mostrar'        => true,
-            ];
-        }
-
-        wp_send_json_success( $config );
     }
 }

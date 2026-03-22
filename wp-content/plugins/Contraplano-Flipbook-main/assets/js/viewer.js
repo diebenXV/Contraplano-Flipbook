@@ -11,6 +11,7 @@
         if ( ! datos ) return;
 
         const canvas         = contenedor.querySelector( '.flipbook-canvas' );
+        const canvasWrapper  = contenedor.querySelector( '.flipbook-canvas-wrapper' );
         const capaOverlays   = contenedor.querySelector( '.flipbook-overlays' );
         const paginaActualEl = contenedor.querySelector( '.flipbook-pagina-actual' );
         const btnAnt         = contenedor.querySelector( '.flipbook-anterior' );
@@ -19,148 +20,112 @@
         let pdfDoc       = null;
         let paginaActual = 1;
         const total      = datos.paginas;
+        let ultimaDireccion = 'next';
+        let resizeTimer = null;
+        let renderToken = 0;
+
+        // Configuración de números de página (viene desde PHP vía shortcode)
         const configNumeros = datos.config_numeros || {
-            colorNumero: '#666666',
-            colorFondo: '#FFFFFF',
+            colorNumero:   '#666666',
+            colorFondo:    '#FFFFFF',
             opacidadFondo: 0.8,
-            posicion: 'inferior-derecha',
-            tamanio: 14,
-            mostrar: true
+            posicion:      'inferior-derecha',
+            tamanio:       14,
+            mostrar:       true,
         };
 
         pdfjsLib.GlobalWorkerOptions.workerSrc =
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-        pdfjsLib.getDocument( datos.pdf_url ).promise.then( function ( pdf ) {
+        pdfjsLib.getDocument({
+            url:             datos.pdf_url,
+            withCredentials: false,
+            cMapUrl:         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+            cMapPacked:      true,
+        }).promise.then( function ( pdf ) {
             pdfDoc = pdf;
-            renderizarPagina( 1 );
+            renderizarPagina( 1, false );
+        }).catch( function(err) {
+            console.error( 'PDF.js viewer error:', err );
         });
 
-        btnAnt.addEventListener( 'click', () => irA( paginaActual - 1 ) );
-        btnSig.addEventListener( 'click', () => irA( paginaActual + 1 ) );
+        btnAnt.addEventListener( 'click', () => {
+            ultimaDireccion = 'prev';
+            irA( paginaActual - 1 );
+        });
+        btnSig.addEventListener( 'click', () => {
+            ultimaDireccion = 'next';
+            irA( paginaActual + 1 );
+        });
+
+        window.addEventListener( 'resize', function () {
+            clearTimeout( resizeTimer );
+            resizeTimer = setTimeout( function () {
+                if ( pdfDoc ) renderizarPagina( paginaActual, false );
+            }, 120 );
+        });
 
         function irA( n ) {
-            if ( n < 1 || n > total ) return;
+            if ( n < 1 || n > total || ! pdfDoc ) return;
+            ultimaDireccion = n > paginaActual ? 'next' : 'prev';
             paginaActual = n;
-            renderizarPagina( n );
+            renderizarPagina( n, true );
             if ( paginaActualEl ) paginaActualEl.textContent = n;
         }
 
-        function renderizarPagina( num ) {
+        function renderizarPagina( num, animar ) {
+            const token = ++renderToken;
+
             pdfDoc.getPage( num ).then( function ( pag ) {
-                const vp = pag.getViewport({ scale: 1.5 });
+                if ( token !== renderToken ) return;
+
+                const baseVp = pag.getViewport({ scale: 1 });
+                const hostEl = canvasWrapper || contenedor;
+                const hostStyle = window.getComputedStyle( hostEl );
+                const paddingX =
+                    parseFloat( hostStyle.paddingLeft || '0' ) +
+                    parseFloat( hostStyle.paddingRight || '0' );
+                const anchoDisponible = Math.max( 220, hostEl.clientWidth - paddingX - 2 );
+                const escalaMaxima = 1.5;
+                const escala = Math.max( 0.35, Math.min( escalaMaxima, anchoDisponible / baseVp.width ) );
+                const vp = pag.getViewport({ scale: escala });
+
+                if ( animar ) aplicarAnimacionCambio( ultimaDireccion );
+
                 canvas.width  = vp.width;
                 canvas.height = vp.height;
                 capaOverlays.style.width  = vp.width  + 'px';
                 capaOverlays.style.height = vp.height + 'px';
+
                 pag.render({ canvasContext: canvas.getContext( '2d' ), viewport: vp })
                    .promise.then( () => {
+                       if ( token !== renderToken ) return;
                        dibujarNumeroPagina( canvas, num, total, configNumeros );
                        renderizarOverlays( num, vp.width, vp.height );
                    });
             });
         }
 
-        function dibujarNumeroPagina( canvas, paginaActual, totalPaginas, config ) {
-            if ( ! config.mostrar ) return;
-
-            const ctx = canvas.getContext( '2d' );
-            const padding = 15;
-            const fontSize = Math.max( config.tamanio, canvas.width * 0.015 );
-            const texto = paginaActual + ' / ' + totalPaginas;
-
-            // Configurar fuente
-            ctx.font = 'bold ' + fontSize + 'px Arial, sans-serif';
-            ctx.fillStyle = config.colorNumero;
-            ctx.textBaseline = 'bottom';
-
-            // Medir ancho del texto para agregar fondo
-            const metrics = ctx.measureText( texto );
-            const textWidth = metrics.width;
-            const textHeight = fontSize + 4;
-
-            // Calcular posición según configuración
-            let x, y;
-            const posicion = config.posicion;
-
-            if ( posicion === 'inferior-derecha' ) {
-                ctx.textAlign = 'right';
-                x = canvas.width - padding;
-                y = canvas.height - padding;
-            } else if ( posicion === 'inferior-izquierda' ) {
-                ctx.textAlign = 'left';
-                x = padding;
-                y = canvas.height - padding;
-            } else if ( posicion === 'inferior-centro' ) {
-                ctx.textAlign = 'center';
-                x = canvas.width / 2;
-                y = canvas.height - padding;
-            } else if ( posicion === 'superior-derecha' ) {
-                ctx.textAlign = 'right';
-                x = canvas.width - padding;
-                y = padding + fontSize;
-            } else if ( posicion === 'superior-izquierda' ) {
-                ctx.textAlign = 'left';
-                x = padding;
-                y = padding + fontSize;
-            } else if ( posicion === 'superior-centro' ) {
-                ctx.textAlign = 'center';
-                x = canvas.width / 2;
-                y = padding + fontSize;
-            } else if ( posicion === 'centro' ) {
-                ctx.textAlign = 'center';
-                x = canvas.width / 2;
-                y = ( canvas.height / 2 ) + ( fontSize / 2 );
-            }
-
-            // Calcular posición del fondo
-            let bgX, bgY, bgWidth = textWidth + 8, bgHeight = textHeight + 4;
-
-            if ( posicion === 'inferior-derecha' ) {
-                bgX = canvas.width - textWidth - padding - 4;
-                bgY = canvas.height - textHeight - padding;
-            } else if ( posicion === 'inferior-izquierda' ) {
-                bgX = padding - 4;
-                bgY = canvas.height - textHeight - padding;
-            } else if ( posicion === 'inferior-centro' ) {
-                bgX = ( canvas.width / 2 ) - ( bgWidth / 2 );
-                bgY = canvas.height - textHeight - padding;
-            } else if ( posicion === 'superior-derecha' ) {
-                bgX = canvas.width - textWidth - padding - 4;
-                bgY = padding - 4;
-            } else if ( posicion === 'superior-izquierda' ) {
-                bgX = padding - 4;
-                bgY = padding - 4;
-            } else if ( posicion === 'superior-centro' ) {
-                bgX = ( canvas.width / 2 ) - ( bgWidth / 2 );
-                bgY = padding - 4;
-            } else if ( posicion === 'centro' ) {
-                bgX = ( canvas.width / 2 ) - ( bgWidth / 2 );
-                bgY = ( canvas.height / 2 ) - ( bgHeight / 2 );
-            }
-
-            // Dibujar fondo semi-transparente
-            const rgbColor = hexToRgb( config.colorFondo );
-            ctx.fillStyle = 'rgba(' + rgbColor.r + ', ' + rgbColor.g + ', ' + rgbColor.b + ', ' + config.opacidadFondo + ')';
-            ctx.fillRect( bgX, bgY, bgWidth, bgHeight );
-
-            // Dibujar texto
-            ctx.fillStyle = config.colorNumero;
-            ctx.fillText( texto, x, y );
-        }
-
-        function hexToRgb( hex ) {
-            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec( hex );
-            return result ? {
-                r: parseInt( result[1], 16 ),
-                g: parseInt( result[2], 16 ),
-                b: parseInt( result[3], 16 )
-            } : { r: 102, g: 102, b: 102 };
+        function aplicarAnimacionCambio( direccion ) {
+            if ( ! canvasWrapper ) return;
+            const clase = direccion === 'prev' ? 'flipbook-turn-prev' : 'flipbook-turn-next';
+            canvasWrapper.classList.remove( 'flipbook-turn-prev', 'flipbook-turn-next' );
+            void canvasWrapper.offsetWidth;
+            canvasWrapper.classList.add( clase );
+            setTimeout( function () {
+                canvasWrapper.classList.remove( clase );
+            }, 460 );
         }
 
         function renderizarOverlays( numPag, W, H ) {
             // Detener audios antes de limpiar
-            capaOverlays.querySelectorAll( 'audio' ).forEach( a => a.pause() );
+            capaOverlays.querySelectorAll( 'audio' ).forEach( function ( a ) {
+                a.pause();
+                if ( a.parentElement ) {
+                    a.parentElement.style.background = 'transparent';
+                    a.parentElement.style.borderColor = 'rgba(255,255,255,0.45)';
+                }
+            });
             capaOverlays.innerHTML = '';
 
             ( datos.overlays || [] )
@@ -318,9 +283,19 @@
 
         /* ── Audio ── */
         function buildAudio( wrap, d ) {
+                        const colorIcono = d.iconColor || d.colorIcono || d.color || '#FFFFFF';
+                        const bgIdle = 'rgba(0,0,0,0.28)';
+                        const bgActivo = 'rgba(0,0,0,0.46)';
+                        const borderIdle = 'rgba(255,255,255,0.72)';
+                        const borderActive = 'rgba(255,255,255,0.98)';
+            const playPath = 'M8 5v14l11-7z';
+            const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
+
+                        wrap.classList.add( 'flipbook-audio-overlay' );
             wrap.style.cssText =
-                'background:#C70000;display:flex;align-items:center;justify-content:center;'
-              + 'cursor:pointer;border-radius:6px;';
+                                'background:' + bgIdle + ';display:flex;align-items:center;justify-content:center;'
+                            + 'cursor:pointer;border-radius:6px;border:1px solid ' + borderIdle + ';'
+                            + 'backdrop-filter:blur(1px);';
 
             const audio = document.createElement( 'audio' );
             audio.src     = d.url || '';
@@ -329,23 +304,44 @@
 
             const svg = document.createElementNS( 'http://www.w3.org/2000/svg', 'svg' );
             svg.setAttribute( 'viewBox', '0 0 24 24' );
-            svg.setAttribute( 'fill',    'white' );
+            svg.setAttribute( 'fill', colorIcono );
             svg.setAttribute( 'width',   '45%' );
             svg.setAttribute( 'height',  '45%' );
-            svg.innerHTML =
-                '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>';
+            svg.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,.65))';
+            svg.innerHTML = `<path d="${playPath}"/>`;
 
             let playing = !! d.autoplay;
             wrap.appendChild( audio );
             wrap.appendChild( svg );
+            if ( playing ) {
+                wrap.style.background = bgActivo;
+                wrap.style.borderColor = borderActive;
+                svg.innerHTML = `<path d="${pausePath}"/>`;
+            }
 
             wrap.addEventListener( 'click', function () {
-                if ( playing ) { audio.pause(); wrap.style.background = '#C70000'; }
-                else           { audio.play();  wrap.style.background = '#9B0000'; }
-                playing = ! playing;
+                if ( playing ) {
+                    audio.pause();
+                    wrap.style.background = bgIdle;
+                    wrap.style.borderColor = borderIdle;
+                    svg.innerHTML = `<path d="${playPath}"/>`;
+                    playing = false;
+                } else {
+                    audio.play().then( function () {
+                        wrap.style.background = bgActivo;
+                        wrap.style.borderColor = borderActive;
+                        svg.innerHTML = `<path d="${pausePath}"/>`;
+                        playing = true;
+                    }).catch( function () {
+                        playing = false;
+                    });
+                }
             });
             audio.addEventListener( 'ended', function () {
-                playing = false; wrap.style.background = '#C70000';
+                playing = false;
+                wrap.style.background = bgIdle;
+                wrap.style.borderColor = borderIdle;
+                svg.innerHTML = `<path d="${playPath}"/>`;
             });
         }
 
@@ -394,6 +390,55 @@
                     wrap.appendChild( svg );
                 }
             }
+        }
+
+        /* ── Número de página sobre el canvas ── */
+        function dibujarNumeroPagina( canvas, paginaActual, totalPaginas, config ) {
+            if ( ! config.mostrar ) return;
+
+            const ctx      = canvas.getContext( '2d' );
+            const padding  = 15;
+            const fontSize = Math.max( config.tamanio, canvas.width * 0.015 );
+            const texto    = paginaActual + ' / ' + totalPaginas;
+
+            ctx.font         = 'bold ' + fontSize + 'px Arial, sans-serif';
+            ctx.textBaseline = 'bottom';
+
+            const metrics    = ctx.measureText( texto );
+            const textWidth  = metrics.width;
+            const textHeight = fontSize + 4;
+            const pos        = config.posicion;
+
+            let x, y;
+            if      ( pos === 'inferior-derecha'   ) { ctx.textAlign='right';  x=canvas.width-padding;  y=canvas.height-padding; }
+            else if ( pos === 'inferior-izquierda' ) { ctx.textAlign='left';   x=padding;               y=canvas.height-padding; }
+            else if ( pos === 'inferior-centro'    ) { ctx.textAlign='center'; x=canvas.width/2;        y=canvas.height-padding; }
+            else if ( pos === 'superior-derecha'   ) { ctx.textAlign='right';  x=canvas.width-padding;  y=padding+fontSize; }
+            else if ( pos === 'superior-izquierda' ) { ctx.textAlign='left';   x=padding;               y=padding+fontSize; }
+            else if ( pos === 'superior-centro'    ) { ctx.textAlign='center'; x=canvas.width/2;        y=padding+fontSize; }
+            else if ( pos === 'centro'             ) { ctx.textAlign='center'; x=canvas.width/2;        y=(canvas.height/2)+(fontSize/2); }
+
+            const bgW = textWidth+8, bgH = textHeight+4;
+            let bgX, bgY;
+            if      ( pos === 'inferior-derecha'   ) { bgX=canvas.width-textWidth-padding-4; bgY=canvas.height-textHeight-padding; }
+            else if ( pos === 'inferior-izquierda' ) { bgX=padding-4;                        bgY=canvas.height-textHeight-padding; }
+            else if ( pos === 'inferior-centro'    ) { bgX=(canvas.width/2)-(bgW/2);         bgY=canvas.height-textHeight-padding; }
+            else if ( pos === 'superior-derecha'   ) { bgX=canvas.width-textWidth-padding-4; bgY=padding-4; }
+            else if ( pos === 'superior-izquierda' ) { bgX=padding-4;                        bgY=padding-4; }
+            else if ( pos === 'superior-centro'    ) { bgX=(canvas.width/2)-(bgW/2);         bgY=padding-4; }
+            else if ( pos === 'centro'             ) { bgX=(canvas.width/2)-(bgW/2);         bgY=(canvas.height/2)-(bgH/2); }
+
+            const rgb = hexRgb( config.colorFondo );
+            ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',' + config.opacidadFondo + ')';
+            ctx.fillRect( bgX, bgY, bgW, bgH );
+
+            ctx.fillStyle = config.colorNumero;
+            ctx.fillText( texto, x, y );
+        }
+
+        function hexRgb( hex ) {
+            const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec( hex );
+            return r ? { r:parseInt(r[1],16), g:parseInt(r[2],16), b:parseInt(r[3],16) } : {r:102,g:102,b:102};
         }
 
         /* ── Util ── */

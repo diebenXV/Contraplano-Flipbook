@@ -76,6 +76,62 @@
 .btn-primario:hover    { background: #ea6a0a; transform: translateY(-1px); }
 .btn-primario:disabled { background: #fdba74; cursor: not-allowed; transform: none; }
 
+/* ── Sección números de página en el sidebar ── */
+.pnum-check-label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #374151;
+    cursor: pointer;
+}
+.pnum-check-label input[type="checkbox"] {
+    accent-color: #f97316;
+    width: 14px; height: 14px;
+}
+.pnum-label {
+    display: block;
+    font-size: 11px;
+    color: #6b7280;
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+.pnum-color-fila {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pnum-color-fila input[type="color"] {
+    width: 36px; height: 28px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    padding: 2px;
+    cursor: pointer;
+    background: none;
+}
+.pnum-hex {
+    font-size: 11px;
+    font-family: monospace;
+    color: #6b7280;
+}
+.pnum-slider {
+    width: 100%;
+    cursor: pointer;
+    accent-color: #f97316;
+    margin-top: 4px;
+}
+.pnum-select {
+    width: 100%;
+    padding: 5px 7px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+}
+.pnum-select:focus { border-color: #3b82f6; }
+
 /* Botón Vista previa — verde, separado del botón guardar */
 .btn-preview {
     background: #16a34a;
@@ -448,10 +504,10 @@
     display: flex; align-items: center; justify-content: center;
     border-radius: 4px;
     cursor: pointer;
-    transition: filter .15s;
+    transition: background .15s, border-color .15s;
 }
-.ov-audio-btn:hover  { filter: brightness(1.15); }
-.ov-audio-btn.activo { filter: brightness(.8); }
+.ov-audio-btn:hover  { background: rgba(0,0,0,.15) !important; border-color: rgba(255,255,255,.8) !important; }
+.ov-audio-btn.activo { background: rgba(0,0,0,.25) !important; border-color: rgba(255,255,255,.95) !important; }
 
 /* ============================================================
    MODALES
@@ -688,6 +744,36 @@
     border: 1px solid #e2e8f0;
 }
 .fila-toggle-audio label:first-child { font-weight: 600; color: #374151; }
+
+.audio-color-config {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+
+.audio-color-fila {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+#audio-icon-color {
+    width: 38px;
+    height: 28px;
+    border: 1px solid #d1d5db;
+    border-radius: 5px;
+    padding: 2px;
+    cursor: pointer;
+    background: none;
+}
+
+#audio-icon-color-hex {
+    font-size: 12px;
+    font-family: monospace;
+    color: #6b7280;
+}
 
 .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
 .toggle input { display: none; }

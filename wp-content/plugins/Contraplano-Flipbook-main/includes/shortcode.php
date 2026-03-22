@@ -122,23 +122,23 @@ class Flipbook_Shortcode {
 
         // Obtener configuración de números de página
         $config_numeros = get_post_meta( $flipbook_id, '_flipbook_config_numeros', true );
-        if ( ! $config_numeros ) {
+        if ( ! $config_numeros || ! is_array( $config_numeros ) ) {
             $config_numeros = [
-                'colorNumero'    => '#666666',
-                'colorFondo'     => '#FFFFFF',
-                'opacidadFondo'  => 0.8,
-                'posicion'       => 'inferior-derecha',
-                'tamanio'        => 14,
-                'mostrar'        => true,
+                'colorNumero'   => '#666666',
+                'colorFondo'    => '#FFFFFF',
+                'opacidadFondo' => 0.8,
+                'posicion'      => 'inferior-derecha',
+                'tamanio'       => 14,
+                'mostrar'       => true,
             ];
         }
 
         // Pasar los datos al JavaScript del visor
         $datos_js = [
-            'pdf_url'       => $pdf_url,
-            'paginas'       => intval( $paginas ),
-            'overlays'      => $overlays,
-            'flipbook_id'   => $flipbook_id,
+            'pdf_url'        => $pdf_url,
+            'paginas'        => intval( $paginas ),
+            'overlays'       => $overlays,
+            'flipbook_id'    => $flipbook_id,
             'config_numeros' => $config_numeros,
         ];
 
