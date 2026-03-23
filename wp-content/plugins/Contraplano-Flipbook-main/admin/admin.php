@@ -493,6 +493,7 @@ class Flipbook_Admin {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title><?php echo esc_html( $titulo ); ?> — Vista previa</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/page-flip/dist/js/page-flip.browser.js"></script>
 <style>
 /* ── Reset total ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -578,7 +579,10 @@ body { display: flex; flex-direction: column; }
 .ov-layer {
     position: absolute;
     top: 0; left: 0;
-    pointer-events: all;
+    pointer-events: none;
+}
+.ov-layer .ov-html {
+    pointer-events: auto;
 }
 /* Sombra del lomo */
 #lomo {
@@ -787,13 +791,8 @@ body { display: flex; flex-direction: column; }
         <div class="spin-ring"></div>
         <span>Cargando flipbook…</span>
     </div>
-
-    <div id="spread" style="display:none;">
-        <div class="slot" id="slot-l"><canvas id="cv-l"></canvas><div class="ov-layer" id="ov-l"></div></div>
-        <div id="lomo"></div>
-        <div id="flip-sombra-movil"></div>
-        <div class="slot" id="slot-r"><canvas id="cv-r"></canvas><div class="ov-layer" id="ov-r"></div></div>
-    </div>
+    <!-- StPageFlip renderiza aquí el libro con animación real -->
+    <div id="flip-container" style="display:none;"></div>
 
     <button class="flecha" id="flecha-izq" disabled>&#8249;</button>
     <button class="flecha" id="flecha-der" disabled>&#8250;</button>
@@ -831,37 +830,26 @@ body { display: flex; flex-direction: column; }
     const OVERLAYS   = <?php echo wp_json_encode( array_values( $overlays ) ); ?>;
     const CONFIG_NUM = <?php echo wp_json_encode( $config_numeros ?? [] ); ?>;
 
-    // totalPags se actualiza desde pdf.numPages al cargar — no confiamos en el meta de WP
-    let totalPags = <?php echo intval( $paginas ); ?>;
-    let pdfDoc    = null;
-    let pagActual = 1;
-    let enRender  = false;
-    // Estado de la animación de volteo
-    let animando  = false;
-    let pendiente = null;   // {n, dir} solicitud pendiente durante animación
+    let totalPags  = <?php echo intval( $paginas ); ?>;
+    let pdfDoc     = null;
+    let pageFlip   = null;          // instancia de StPageFlip
+    let paginas    = [];            // canvases renderizados de cada página
+    let paginasListas = 0;         // cuántas ya renderizamos
+    let pagActual  = 1;
 
-    // DOM refs
-    const spinner   = document.getElementById('spinner');
-    const spread    = document.getElementById('spread');
-    const cvL       = document.getElementById('cv-l');
-    const cvR       = document.getElementById('cv-r');
-    const ovL       = document.getElementById('ov-l');
-    const ovR       = document.getElementById('ov-r');
-    const slotL     = document.getElementById('slot-l');
-    const slotR     = document.getElementById('slot-r');
-    const lomo      = document.getElementById('lomo');
-    const sombraMovil = document.getElementById('flip-sombra-movil');
-    const flechaIzq = document.getElementById('flecha-izq');
-    const flechaDer = document.getElementById('flecha-der');
-    const btnFirst  = document.getElementById('btn-first');
-    const btnPrev   = document.getElementById('btn-prev');
-    const btnNext   = document.getElementById('btn-next');
-    const btnLast   = document.getElementById('btn-last');
-    const inpPag    = document.getElementById('inp-pag');
-    const lblTotal  = document.getElementById('lbl-total');
-    const area      = document.getElementById('flipbook-area');
+    const spinner       = document.getElementById('spinner');
+    const flipContainer = document.getElementById('flip-container');
+    const flechaIzq     = document.getElementById('flecha-izq');
+    const flechaDer     = document.getElementById('flecha-der');
+    const btnFirst      = document.getElementById('btn-first');
+    const btnPrev       = document.getElementById('btn-prev');
+    const btnNext       = document.getElementById('btn-next');
+    const btnLast       = document.getElementById('btn-last');
+    const inpPag        = document.getElementById('inp-pag');
+    const lblTotal      = document.getElementById('lbl-total');
+    const area          = document.getElementById('flipbook-area');
 
-    /* ── Cargar PDF.js ── */
+    /* ── Cargar PDF con PDF.js ── */
     pdfjsLib.GlobalWorkerOptions.workerSrc =
         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -870,589 +858,357 @@ body { display: flex; flex-direction: column; }
         withCredentials: false,
         cMapUrl:         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
         cMapPacked:      true,
-    }).promise.then(pdf => {
+    }).promise.then(async pdf => {
         pdfDoc    = pdf;
         totalPags = pdf.numPages;
         lblTotal.textContent = '/ ' + totalPags;
-        spinner.style.display = 'none';
-        spread.style.display  = 'flex';
-        irA(1, false);
-    }).catch(() => {
-        spinner.innerHTML = '<p style="color:#f66;text-align:center;">Error al cargar el PDF.<br>Verifica que el archivo exista.</p>';
+
+        // Renderizar todas las páginas como canvases (StPageFlip necesita el HTML ya generado)
+        await renderizarTodasLasPaginas();
+
+        // Iniciar StPageFlip
+        iniciarPageFlip();
+
+    }).catch(err => {
+        spinner.innerHTML = '<p style="color:#f66;text-align:center;">Error al cargar el PDF.<br>' + (err.message||err) + '</p>';
     });
 
-    /* ── Calcular escala óptima ── */
-    async function escalaOptima(doblesPaginas) {
+    /* ── Calcular escala según área disponible ── */
+    async function calcularEscalaBase() {
         const pag  = await pdfDoc.getPage(1);
         const vp   = pag.getViewport({ scale: 1 });
         const areaW = area.offsetWidth  - 140;
         const areaH = area.offsetHeight - 20;
-        // Si es portada (página sola), usar todo el ancho; si es spread, dividir entre 2
-        const divisor = doblesPaginas ? 2 : 1;
-        const porAncho = ( areaW / divisor ) / vp.width;
-        const porAlto  = areaH / vp.height;
-        return Math.min( porAncho, porAlto, 2.5 );
+        const porAncho = (areaW / 2) / vp.width;
+        const porAlto  = areaH      / vp.height;
+        return Math.min(porAncho, porAlto, 2.5);
     }
 
-    /* ── Decidir si es spread o página sola ── */
-    function esPortada(n) {
-        // Página 1: portada sola
-        // Última página cuando el total es PAR: contraportada sola
-        if (n === 1) return true;
-        if (n === totalPags && totalPags % 2 === 0) return true;
-        return false;
-    }
+    /* ── Renderizar todas las páginas del PDF como canvases ── */
+    async function renderizarTodasLasPaginas() {
+        const esc = await calcularEscalaBase();
 
-    /* ── Renderizar spread o página sola ── */
-    async function renderSpread(numIzq, animMode = 'none', dir = 'adelante') {
-        if (enRender) return;
-        enRender = true;
+        // Renderizar la primera página para saber las dimensiones
+        const pag1   = await pdfDoc.getPage(1);
+        const vp1    = pag1.getViewport({ scale: esc });
+        const W      = Math.round(vp1.width);
+        const H      = Math.round(vp1.height);
 
-        try {
-            if (animMode === 'normal') {
-                await animarVolteoReal(numIzq, dir);
-            } else if (animMode === 'cover-open' || animMode === 'cover-close') {
-                await animarTransicionPortada(numIzq, animMode);
-            } else {
-                await dibujarSpread(numIzq);
+        // Limpiar el contenedor del flipbook
+        flipContainer.innerHTML = '';
+
+        for (let i = 1; i <= totalPags; i++) {
+            const pag = await pdfDoc.getPage(i);
+            const vp  = pag.getViewport({ scale: esc });
+
+            const cv = document.createElement('canvas');
+            cv.width  = W;
+            cv.height = H;
+            cv.style.cssText = `display:block;width:${W}px;height:${H}px;`;
+
+            await pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+
+            // Dibujar número de página si está configurado
+            if (CONFIG_NUM && CONFIG_NUM.mostrar !== false) {
+                dibujarNumPag(cv, i, totalPags, CONFIG_NUM);
             }
 
-            inpPag.value = numIzq;
+            // Cada página es un div que StPageFlip va a usar
+            const pageDiv = document.createElement('div');
+            pageDiv.className = 'page-item';
+            pageDiv.dataset.page = i;
+            pageDiv.style.cssText = `width:${W}px;height:${H}px;overflow:hidden;position:relative;`;
+            pageDiv.appendChild(cv);
+            inyectarOverlaysEnPagina(pageDiv, i, W, H);
+            flipContainer.appendChild(pageDiv);
+
+            paginas[i] = { div: pageDiv, canvas: cv, W, H };
+        }
+
+        return { W, H };
+    }
+
+    /* ── Inicializar StPageFlip ── */
+    function iniciarPageFlip() {
+        if (!paginas[1]) return;
+        const { W, H } = paginas[1];
+
+        spinner.style.display = 'none';
+        flipContainer.style.display = 'block';
+
+        pageFlip = new St.PageFlip(flipContainer, {
+            width:            W,
+            height:           H,
+            size:             'fixed',
+            minWidth:         W,
+            maxWidth:         W,
+            minHeight:        H,
+            maxHeight:        H,
+            drawShadow:       true,
+            flippingTime:     700,
+            usePortrait:      true,
+            startPage:        0,
+            showCover:        true,      // primera y última página sola (portada/contraportada)
+            mobileScrollSupport: false,
+            clickEventForward:   true,
+            useMouseEvents:      true,
+            swipeDistance:       30,
+            showPageCorners:     true,
+            disableFlipByClick:  false,
+        });
+
+        // Cargar todas las páginas
+        pageFlip.loadFromHTML(flipContainer.querySelectorAll('.page-item'));
+
+        // Eventos de StPageFlip
+        pageFlip.on('flip', function(e) {
+            const idx = e.data;                // índice 0-based de la página izquierda visible
+            pagActual = idx + 1;
+            inpPag.value = pagActual;
             actualizarBotones();
-        } finally {
-            enRender = false;
 
-            if (pendiente) {
-                const p = pendiente;
-                pendiente = null;
-                irA(p.n, true);
-            }
-        }
+            // Evitar que queden audios reproduciéndose al cambiar de página.
+            pausarAudiosDelLibro();
+        });
+
+        pageFlip.on('changeOrientation', function() {
+            irA(pagActual);
+        });
+
+        actualizarBotones();
     }
 
-    async function dibujarSpread(numIzq) {
-        const portada = esPortada(numIzq);
-        const esc     = await escalaOptima(!portada);
-        const numDer  = numIzq + 1;
-
-        // Portada/contraportada: centrar la única página visible.
-        spread.style.justifyContent = portada ? 'center' : 'flex-start';
-
-        await renderPagina(numIzq, cvL, ovL, slotL, esc);
-
-        if (!portada && numDer <= totalPags) {
-            slotR.style.display = '';
-            lomo.style.display  = '';
-            await renderPagina(numDer, cvR, ovR, slotR, esc);
-        } else {
-            slotR.style.display = 'none';
-            lomo.style.display  = 'none';
-        }
-    }
-
-    /* ── Animación de volteo de hoja (estilo libro) ── */
-    function obtenerSlotAnimacion(dir) {
-        const derechaVisible = slotR.style.display !== 'none';
-        if (dir === 'adelante') return derechaVisible ? slotR : slotL;
-        return slotL;
-    }
-
-    function crearCapaVolteo(dir, slotOverride = null, originOverride = null) {
-        const slot = slotOverride || obtenerSlotAnimacion(dir);
-        const cv = slot.querySelector('canvas');
-        if (!cv || !cv.width || !cv.height) return null;
-
-        const slotRect   = slot.getBoundingClientRect();
-        const spreadRect = spread.getBoundingClientRect();
-
+    function inyectarOverlaysEnPagina(pageDiv, numPag, W, H) {
         const capa = document.createElement('div');
-        capa.className = 'flip-turn-layer';
-        capa.style.left = (slotRect.left - spreadRect.left) + 'px';
-        capa.style.top = (slotRect.top - spreadRect.top) + 'px';
-        capa.style.width = slotRect.width + 'px';
-        capa.style.height = slotRect.height + 'px';
-        capa.style.transformOrigin = originOverride || (dir === 'adelante' ? 'left center' : 'right center');
-        capa.style.transform = 'perspective(2200px) rotateY(0deg)';
-
-        const front = document.createElement('div');
-        front.className = 'flip-turn-face flip-turn-front';
-        const frontCanvas = document.createElement('canvas');
-        frontCanvas.width = cv.width;
-        frontCanvas.height = cv.height;
-        const fctx = frontCanvas.getContext('2d');
-        if (!fctx) return null;
-        fctx.drawImage(cv, 0, 0);
-        front.appendChild(frontCanvas);
-
-        const back = document.createElement('div');
-        back.className = 'flip-turn-face flip-turn-back';
-
-        capa.appendChild(front);
-        capa.appendChild(back);
-
-        const sh = document.createElement('div');
-        sh.className = 'flip-turn-shadow';
-        if (dir === 'adelante') {
-            sh.style.left = '0';
-            sh.style.background = 'linear-gradient(to right, rgba(0,0,0,.28), rgba(0,0,0,0))';
-        } else {
-            sh.style.right = '0';
-            sh.style.background = 'linear-gradient(to left, rgba(0,0,0,.28), rgba(0,0,0,0))';
-        }
-        capa.appendChild(sh);
-
-        spread.appendChild(capa);
-        return { capa, shadow: sh };
-    }
-
-    async function animarTransicionPortada(numIzq, mode) {
-        const sourceSlot = slotL;
-        const sourceRect = sourceSlot.getBoundingClientRect();
-
-        const origin = mode === 'cover-open' ? 'left center' : 'right center';
-        const layer = crearCapaVolteo(
-            mode === 'cover-open' ? 'adelante' : 'atras',
-            sourceSlot,
-            origin
-        );
-
-        await dibujarSpread(numIzq);
-
-        if (!layer) return;
-
-        const { capa, shadow } = layer;
-        const targetRect = slotL.getBoundingClientRect();
-        const dx = ( targetRect.left - sourceRect.left );
-        const dy = ( targetRect.top  - sourceRect.top );
-        const finRot = mode === 'cover-open' ? -170 : 170;
-
-        return new Promise(resolve => {
-            animando = true;
-
-            if ( mode === 'cover-open' ) {
-                slotR.style.transition = 'none';
-                slotR.style.opacity = '0';
-                slotR.style.transform = 'translateX(26px)';
-                lomo.style.transition = 'none';
-                lomo.style.opacity = '0.15';
-            }
-
-            sombraMovil.style.transition = 'opacity 1.65s ease-in-out, transform 1.65s ease-in-out';
-            sombraMovil.style.opacity = '0.34';
-            sombraMovil.style.transform = `translateX(-50%) translateX(${mode === 'cover-open' ? '-3%' : '3%'})`;
-
-            // Trigger transition
-            void capa.offsetWidth;
-            if ( mode === 'cover-open' ) void slotR.offsetWidth;
-
-            capa.style.transition = 'transform 1.65s ease-in-out, box-shadow 1.65s ease-in-out';
-            shadow.style.transition = 'opacity 1.2s ease-in-out';
-            capa.style.transform = `translate(${dx}px, ${dy}px) perspective(2200px) rotateY(${finRot}deg)`;
-            capa.style.boxShadow = mode === 'cover-open'
-                ? '-14px 0 20px rgba(0,0,0,.22)'
-                : '14px 0 20px rgba(0,0,0,.22)';
-            shadow.style.opacity = '0.5';
-
-            if ( mode === 'cover-open' ) {
-                slotR.style.transition = 'opacity 1.28s ease, transform 1.28s ease';
-                slotR.style.opacity = '1';
-                slotR.style.transform = 'translateX(0)';
-
-                lomo.style.transition = 'opacity 1.28s ease';
-                lomo.style.opacity = '1';
-            }
-
-            setTimeout(() => {
-                if (capa.parentNode) capa.parentNode.removeChild(capa);
-                sombraMovil.style.opacity = '0';
-                sombraMovil.style.transform = 'translateX(-50%) translateX(0)';
-                slotR.style.transition = '';
-                slotR.style.opacity = '';
-                slotR.style.transform = '';
-                lomo.style.transition = '';
-                lomo.style.opacity = '';
-                animando = false;
-                resolve();
-            }, 1720);
-        });
-    }
-
-    async function animarVolteoReal(numIzq, dir) {
-        const layer = crearCapaVolteo(dir);
-
-        // Renderizar nuevo spread por debajo de la hoja que gira
-        await dibujarSpread(numIzq);
-
-        if (!layer) return;
-
-        const { capa, shadow } = layer;
-
-        return new Promise(resolve => {
-            animando = true;
-
-            const finRot = dir === 'adelante' ? -168 : 168;
-
-            sombraMovil.style.transition = 'opacity 1.65s ease-in-out, transform 1.65s ease-in-out';
-            sombraMovil.style.opacity = '0.34';
-            sombraMovil.style.transform = `translateX(-50%) translateX(${dir === 'adelante' ? '-3%' : '3%'})`;
-
-            // Trigger transition
-            void capa.offsetWidth;
-
-            capa.style.transition = 'transform 1.65s ease-in-out, box-shadow 1.65s ease-in-out';
-            shadow.style.transition = 'opacity 1.2s ease-in-out';
-            capa.style.transform = `perspective(2200px) rotateY(${finRot}deg)`;
-            capa.style.boxShadow = dir === 'adelante'
-                ? '-14px 0 20px rgba(0,0,0,.22)'
-                : '14px 0 20px rgba(0,0,0,.22)';
-            shadow.style.opacity = '0.5';
-
-            setTimeout(() => {
-                if (capa.parentNode) capa.parentNode.removeChild(capa);
-            sombraMovil.style.opacity = '0';
-            sombraMovil.style.transform = 'translateX(-50%) translateX(0)';
-                animando = false;
-                resolve();
-            }, 1720);
-        });
-    }
-
-    /* ── Renderizar una página en un canvas ── */
-    async function renderPagina(num, cv, ovLayer, slot, esc) {
-        if (num < 1 || num > totalPags) return;
-        const pag = await pdfDoc.getPage(num);
-        const vp  = pag.getViewport({ scale: esc });
-
-        cv.width  = vp.width;
-        cv.height = vp.height;
-        slot.style.width  = vp.width  + 'px';
-        slot.style.height = vp.height + 'px';
-
-        await pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-
-        // Dibujar número de página si está configurado
-        if (CONFIG_NUM && CONFIG_NUM.mostrar !== false) {
-            dibujarNumPag(cv, num, totalPags, CONFIG_NUM);
-        }
-
-        // Overlays de esta página
-        ovLayer.innerHTML = '';
-        ovLayer.style.width  = vp.width  + 'px';
-        ovLayer.style.height = vp.height + 'px';
+        capa.className = 'ov-layer';
+        capa.style.cssText = 'position:absolute;inset:0;z-index:20;';
 
         (OVERLAYS || [])
-            .filter(o => parseInt(o.pagina) === num)
-            .forEach(o => {
-                const el = crearOverlay(o, vp.width, vp.height);
-                if (el) ovLayer.appendChild(el);
+            .filter(ov => parseInt(ov.pagina) === numPag)
+            .forEach(ov => {
+                const left  = (parseFloat(ov.pos_left) / 100) * W;
+                const top   = (parseFloat(ov.pos_top ) / 100) * H;
+                const ancho = (parseFloat(ov.ancho    ) / 100) * W;
+                const alto  = (parseFloat(ov.alto     ) / 100) * H;
+
+                if (ancho < 2 || alto < 2) return;
+
+                const wrap = document.createElement('div');
+                wrap.className = 'ov-html';
+                wrap.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${ancho}px;height:${alto}px;overflow:hidden;border-radius:4px;z-index:25;`;
+
+                let d = ov.datos || {};
+                if (typeof d === 'string') { try { d = JSON.parse(d); } catch(e) { d = {}; } }
+
+                switch (ov.tipo) {
+                    case 'youtube':      ytOverlay   (wrap, d); break;
+                    case 'imagen':       imgOverlay  (wrap, d); break;
+                    case 'presentacion': slideOverlay(wrap, d); break;
+                    case 'audio':        audioOverlay(wrap, d); break;
+                    case 'link':         linkOverlay (wrap, d); break;
+                    default: return;
+                }
+                capa.appendChild(wrap);
             });
+
+        pageDiv.appendChild(capa);
     }
 
-    /* ── Número de página ── */
-    function dibujarNumPag(canvas, pagActual, totalPags, cfg) {
-        if (!cfg || !cfg.mostrar) return;
-        const ctx = canvas.getContext('2d');
-        const pad = 15;
-        const fs  = Math.max(cfg.tamanio || 14, canvas.width * 0.015);
-        const txt = pagActual + ' / ' + totalPags;
-        ctx.font = 'bold ' + fs + 'px Arial,sans-serif';
-        ctx.textBaseline = 'bottom';
-        const pos = cfg.posicion || 'inferior-derecha';
-        let x, y;
-        if      (pos==='inferior-derecha'  ) { ctx.textAlign='right';  x=canvas.width-pad;  y=canvas.height-pad; }
-        else if (pos==='inferior-izquierda') { ctx.textAlign='left';   x=pad;               y=canvas.height-pad; }
-        else if (pos==='inferior-centro'   ) { ctx.textAlign='center'; x=canvas.width/2;    y=canvas.height-pad; }
-        else if (pos==='superior-derecha'  ) { ctx.textAlign='right';  x=canvas.width-pad;  y=pad+fs; }
-        else if (pos==='superior-izquierda') { ctx.textAlign='left';   x=pad;               y=pad+fs; }
-        else if (pos==='superior-centro'   ) { ctx.textAlign='center'; x=canvas.width/2;    y=pad+fs; }
-        else                                 { ctx.textAlign='center'; x=canvas.width/2;    y=canvas.height/2+fs/2; }
-        const mw = ctx.measureText(txt).width;
-        const mh = fs + 4;
-        let bx, by;
-        if      (pos==='inferior-derecha'  ) { bx=canvas.width-mw-pad-4; by=canvas.height-mh-pad; }
-        else if (pos==='inferior-izquierda') { bx=pad-4;                  by=canvas.height-mh-pad; }
-        else if (pos==='inferior-centro'   ) { bx=canvas.width/2-mw/2-4; by=canvas.height-mh-pad; }
-        else if (pos==='superior-derecha'  ) { bx=canvas.width-mw-pad-4; by=pad-4; }
-        else if (pos==='superior-izquierda') { bx=pad-4;                  by=pad-4; }
-        else if (pos==='superior-centro'   ) { bx=canvas.width/2-mw/2-4; by=pad-4; }
-        else                                 { bx=canvas.width/2-mw/2-4; by=canvas.height/2-mh/2; }
-        const rgb = hexRgb(cfg.colorFondo||'#FFFFFF');
-        ctx.fillStyle = 'rgba('+rgb.r+','+rgb.g+','+rgb.b+','+(cfg.opacidadFondo||0.8)+')';
-        ctx.fillRect(bx, by, mw+8, mh+4);
-        ctx.fillStyle = cfg.colorNumero || '#666666';
-        ctx.fillText(txt, x, y);
-    }
-    function hexRgb(h){const r=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);return r?{r:parseInt(r[1],16),g:parseInt(r[2],16),b:parseInt(r[3],16)}:{r:102,g:102,b:102};}
-
-    /* ── Crear overlay ── */
-    function crearOverlay(ov, W, H) {
-        const left  = (parseFloat(ov.pos_left) / 100) * W;
-        const top   = (parseFloat(ov.pos_top ) / 100) * H;
-        const ancho = (parseFloat(ov.ancho    ) / 100) * W;
-        const alto  = (parseFloat(ov.alto     ) / 100) * H;
-
-        if (ancho < 1 || alto < 1) return null;
-
-        const wrap  = document.createElement('div');
-        wrap.style.cssText =
-            `position:absolute;left:${left}px;top:${top}px;`
-          + `width:${ancho}px;height:${alto}px;overflow:hidden;border-radius:4px;z-index:10;`;
-
-        // datos puede llegar como string JSON en algunos casos — parsear si es necesario
-        let d = ov.datos || {};
-        if (typeof d === 'string') {
-            try { d = JSON.parse(d); } catch(e) { d = {}; }
-        }
-
-        switch (ov.tipo) {
-            case 'youtube':      ytOverlay   (wrap, d); break;
-            case 'imagen':       imgOverlay  (wrap, d); break;
-            case 'presentacion': slideOverlay(wrap, d); break;
-            case 'audio':        audioOverlay(wrap, d); break;
-            case 'link':         linkOverlay (wrap, d); break;
-            default: return null;
-        }
-        return wrap;
-    }
-
-    /* YouTube — siempre embed en su cuadrado, sin abrir popup */
-    function ytOverlay(wrap, d) {
-        const p = new URLSearchParams({
-            autoplay:  d.autoplay  || 0,
-            controls:  d.controles !== undefined ? d.controles : 1,
-            mute:      d.silencio  || 0,
-            loop:      d.loop      || 0,
-            start:     d.inicio    || 0,
-            playlist:  d.videoId,
+    function pausarAudiosDelLibro() {
+        flipContainer.querySelectorAll('audio').forEach(a => {
+            try { a.pause(); } catch(_) {}
         });
+    }
+
+    /* ── Overlays builders ── */
+    function bloquearFlipEnInteraccion(el) {
+        const eventos = ['pointerdown', 'mousedown', 'touchstart', 'click', 'dblclick'];
+        eventos.forEach(evt => {
+            el.addEventListener(evt, function(e) {
+                e.stopPropagation();
+            });
+        });
+    }
+
+    function ytOverlay(wrap, d) {
+        bloquearFlipEnInteraccion(wrap);
+        const p = new URLSearchParams({autoplay:d.autoplay||0,controls:d.controles!==undefined?d.controles:1,mute:d.silencio||0,loop:d.loop||0,start:d.inicio||0,playlist:d.videoId});
         const iframe = document.createElement('iframe');
-        iframe.src   = `https://www.youtube.com/embed/${d.videoId}?${p}`;
-        iframe.style.cssText   = 'width:100%;height:100%;border:none;';
-        iframe.allow           = 'accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture';
+        iframe.src = `https://www.youtube.com/embed/${d.videoId}?${p}`;
+        iframe.style.cssText = 'width:100%;height:100%;border:none;';
+        iframe.allow = 'accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture';
         iframe.allowFullscreen = true;
         wrap.appendChild(iframe);
     }
-
     function imgOverlay(wrap, d) {
         const img = document.createElement('img');
-        img.src = d.url || '';
-        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
+        img.src = d.url||''; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block;';
         wrap.appendChild(img);
     }
-
     function slideOverlay(wrap, d) {
-        const imgs = d.imagenes || []; if (!imgs.length) return;
-        wrap.style.position = 'relative';
-        let lista = d.aleatorio ? mezclar([...imgs]) : [...imgs], idx = 0, timer = null;
-        const dur = (parseInt(d.duracion) || 3) * 1000;
-        const inner = document.createElement('div');
-        inner.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;';
-        lista.forEach((src, i) => {
-            const s = document.createElement('div');
-            s.style.cssText = `position:absolute;inset:0;background:url('${src}') center/cover no-repeat;opacity:${i===0?1:0};transition:opacity .5s;`;
-            inner.appendChild(s);
-        });
+        const imgs=d.imagenes||[]; if(!imgs.length) return;
+        wrap.style.position='relative';
+        let lista=d.aleatorio?mezclar([...imgs]):[...imgs],idx=0,timer=null;
+        const dur=(parseInt(d.duracion)||3)*1000;
+        const inner=document.createElement('div'); inner.style.cssText='position:relative;width:100%;height:100%;overflow:hidden;';
+        lista.forEach((src,i)=>{const s=document.createElement('div');s.style.cssText=`position:absolute;inset:0;background:url('${src}') center/cover no-repeat;opacity:${i===0?1:0};transition:opacity .5s;`;inner.appendChild(s);});
         wrap.appendChild(inner);
-        function mostrar(n) { const t=lista.length; idx=d.loop?(((n%t)+t)%t):Math.max(0,Math.min(n,t-1)); Array.from(inner.children).forEach((s,i)=>{s.style.opacity=i===idx?'1':'0';}); }
-        if (d.autoplay) timer = setInterval(() => mostrar(idx+1), dur);
-        if (d.flechas) {
-            const bs='position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;z-index:10;display:flex;align-items:center;justify-content:center;';
-            const bp=document.createElement('button'); bp.style.cssText=bs+'left:4px;'; bp.innerHTML='‹';
-            const bn=document.createElement('button'); bn.style.cssText=bs+'right:4px;'; bn.innerHTML='›';
-            bp.onclick=()=>{if(timer)clearInterval(timer);mostrar(idx-1);}; bn.onclick=()=>{if(timer)clearInterval(timer);mostrar(idx+1);};
-            wrap.appendChild(bp); wrap.appendChild(bn);
-        }
+        function mostrar(n){const t=lista.length;idx=d.loop?(((n%t)+t)%t):Math.max(0,Math.min(n,t-1));Array.from(inner.children).forEach((s,i)=>{s.style.opacity=i===idx?'1':'0';});}
+        if(d.autoplay)timer=setInterval(()=>mostrar(idx+1),dur);
+        if(d.flechas){const bs='position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.55);color:#fff;border:none;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;z-index:10;display:flex;align-items:center;justify-content:center;';const bp=document.createElement('button');bp.style.cssText=bs+'left:4px;';bp.innerHTML='‹';const bn=document.createElement('button');bn.style.cssText=bs+'right:4px;';bn.innerHTML='›';bp.onclick=()=>{if(timer)clearInterval(timer);mostrar(idx-1);};bn.onclick=()=>{if(timer)clearInterval(timer);mostrar(idx+1);};wrap.appendChild(bp);wrap.appendChild(bn);}
     }
-
     function audioOverlay(wrap, d) {
-        const playPath  = 'M8 5v14l11-7z';
+        bloquearFlipEnInteraccion(wrap);
+        const iconColor = d.iconColor || d.colorIcono || d.color || '#ffffff';
+        const bgIdle = 'transparent';
+        const bgActive = 'rgba(0,0,0,.25)';
+        const borderIdle = 'rgba(255,255,255,.45)';
+        const borderActive = 'rgba(255,255,255,.95)';
+        const playPath = 'M8 5v14l11-7z';
         const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
 
-        // NO sobreescribir wrap.style.cssText — ya tiene position/left/top/width/height
-        // Solo agregar los estilos adicionales del audio
-        wrap.style.background   = '#C70000';
-        wrap.style.display      = 'flex';
-        wrap.style.alignItems   = 'center';
-        wrap.style.justifyContent = 'center';
-        wrap.style.cursor       = 'pointer';
-        wrap.style.borderRadius = '6px';
+        wrap.style.display='flex';
+        wrap.style.alignItems='center';
+        wrap.style.justifyContent='center';
+        wrap.style.cursor='pointer';
+        wrap.style.borderRadius='4px';
+        wrap.style.background = bgIdle;
+        wrap.style.border = '1px solid ' + borderIdle;
 
-        const audio = document.createElement('audio');
-        audio.src     = d.url || '';
-        audio.preload = 'auto';
-        if (d.autoplay) audio.autoplay = true;
+        const audio=document.createElement('audio');
+        audio.src=d.url||'';
+        audio.preload='auto';
+        if(d.autoplay)audio.autoplay=true;
 
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('fill', 'white');
-        // Tamaño relativo al contenedor, no fijo
-        svg.style.cssText = 'width:60%;height:60%;max-width:48px;max-height:48px;pointer-events:none;';
-        svg.innerHTML = `<path d="${playPath}"/>`;
+        const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg.setAttribute('viewBox','0 0 24 24');
+        svg.setAttribute('fill', iconColor);
+        svg.setAttribute('width', '55%');
+        svg.setAttribute('height', '55%');
+        svg.style.pointerEvents = 'none';
+        svg.innerHTML='<path d="' + playPath + '"/>';
 
-        let playing = !!d.autoplay;
+        let playing=!!d.autoplay;
         wrap.appendChild(audio);
         wrap.appendChild(svg);
+        if (playing) {
+            wrap.style.background = bgActive;
+            wrap.style.borderColor = borderActive;
+            svg.innerHTML = '<path d="' + pausePath + '"/>';
+        }
 
-        wrap.onclick = () => {
-            if (playing) {
+        wrap.onclick=(e)=>{
+            e.preventDefault();
+            e.stopPropagation();
+            if(playing){
                 audio.pause();
-                wrap.style.background = '#C70000';
-                svg.innerHTML = `<path d="${playPath}"/>`;
-            } else {
-                audio.play();
-                wrap.style.background = '#9B0000';
-                svg.innerHTML = `<path d="${pausePath}"/>`;
+                wrap.style.background = bgIdle;
+                wrap.style.borderColor = borderIdle;
+                svg.innerHTML = '<path d="' + playPath + '"/>';
+                playing=false;
+            }else{
+                audio.play().then(()=>{
+                    wrap.style.background = bgActive;
+                    wrap.style.borderColor = borderActive;
+                    svg.innerHTML = '<path d="' + pausePath + '"/>';
+                    playing=true;
+                }).catch(()=>{
+                    playing=false;
+                });
             }
-            playing = !playing;
         };
-        audio.addEventListener('ended', () => {
-            playing = false;
-            wrap.style.background = '#C70000';
-            svg.innerHTML = `<path d="${playPath}"/>`;
+        audio.addEventListener('ended',()=>{
+            playing=false;
+            wrap.style.background = bgIdle;
+            wrap.style.borderColor = borderIdle;
+            svg.innerHTML = '<path d="' + playPath + '"/>';
         });
     }
-
-    /* Link — navega dentro del visor o abre URL */
     function linkOverlay(wrap, d) {
-        const href = d.href || '';
-        wrap.style.cursor = 'pointer';
-
-        if (href.startsWith('pagina:')) {
-            const n = parseInt(href.replace('pagina:', ''));
-            wrap.title = d.titulo || ('Ir a página ' + n);
-
-            // Fondo semitransparente con flecha para que sea visible
-            wrap.style.background   = 'rgba(26,111,207,0.18)';
-            wrap.style.border       = '2px solid rgba(26,111,207,0.5)';
-            wrap.style.borderRadius = '6px';
-            wrap.style.display      = 'flex';
-            wrap.style.alignItems   = 'center';
-            wrap.style.justifyContent = 'center';
-            wrap.style.transition   = 'background 0.2s';
-
-            // Ícono de flecha hacia la página
-            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('viewBox', '0 0 24 24');
-            svg.setAttribute('fill', 'rgba(26,111,207,0.9)');
-            svg.style.cssText = 'width:50%;height:50%;max-width:36px;max-height:36px;pointer-events:none;';
-            svg.innerHTML = '<path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>';
+        bloquearFlipEnInteraccion(wrap);
+        const href=d.href||''; wrap.style.cursor='pointer';
+        if(href.startsWith('pagina:')){
+            const n=parseInt(href.replace('pagina:',''));
+            wrap.style.background='rgba(26,111,207,0.18)'; wrap.style.border='2px solid rgba(26,111,207,0.5)'; wrap.style.borderRadius='6px'; wrap.style.display='flex'; wrap.style.alignItems='center'; wrap.style.justifyContent='center';
+            wrap.title=d.titulo||('Ir a página '+n);
+            const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('viewBox','0 0 24 24'); svg.setAttribute('fill','rgba(26,111,207,0.9)'); svg.style.cssText='width:50%;height:50%;max-width:36px;max-height:36px;pointer-events:none;';
+            svg.innerHTML='<path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>';
             wrap.appendChild(svg);
-
-            wrap.onmouseenter = () => wrap.style.background = 'rgba(26,111,207,0.32)';
-            wrap.onmouseleave = () => wrap.style.background = 'rgba(26,111,207,0.18)';
-            wrap.onclick = (e) => { e.stopPropagation(); irA(n); };
-
-        } else if (href) {
-            const a = document.createElement('a');
-            a.href  = href;
-            a.title = d.titulo || href;
-            a.style.cssText = 'display:flex;align-items:center;justify-content:center;width:100%;height:100%;text-decoration:none;';
-            if (d.nuevaPestana && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
-                a.target = '_blank'; a.rel = 'noopener noreferrer';
-            }
+            wrap.onmouseenter=()=>{wrap.style.background='rgba(26,111,207,0.32)';};
+            wrap.onmouseleave=()=>{wrap.style.background='rgba(26,111,207,0.18)';};
+            wrap.onclick=e=>{e.stopPropagation();irA(n);};
+        } else if(href){
+            const a=document.createElement('a'); a.href=href; a.title=d.titulo||href; a.style.cssText='display:flex;align-items:center;justify-content:center;width:100%;height:100%;text-decoration:none;';
+            if(d.nuevaPestana&&!href.startsWith('mailto:')&&!href.startsWith('tel:')){a.target='_blank';a.rel='noopener noreferrer';}
             wrap.appendChild(a);
-
-            // Mostrar ícono si tiene uno
-            if (d.icono && d.icono !== 'ninguno') {
-                const paths = {
-                    mas:     'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z',
-                    check:   'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14l-4-4 1.41-1.41L10 13.17l6.59-6.59L18 8l-8 8z',
-                    info:    'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
-                    pregunta:'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z',
-                    carrito: 'M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96C5 16.1 6.1 17 7 17h11v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63H19c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1 1 0 0023.25 4H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z',
-                };
-                if (paths[d.icono]) {
-                    const color = d.color || '#1a6fcf';
-                    const svgI  = document.createElementNS('http://www.w3.org/2000/svg','svg');
-                    svgI.setAttribute('viewBox','0 0 24 24'); svgI.setAttribute('fill',color);
-                    svgI.style.cssText = 'width:55%;height:55%;max-width:40px;max-height:40px;pointer-events:none;';
-                    svgI.innerHTML = `<path d="${paths[d.icono]}"/>`;
-                    a.appendChild(svgI);
-                }
-            }
         }
     }
-
     function mezclar(arr){for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}return arr;}
 
-    /* ── Navegación ── */
-    // Lógica de páginas igual a Paperturn:
-    // - Página 1: portada sola
-    // - Páginas 2-3, 4-5, 6-7...: spreads dobles
-    // - Última página si total es par: contraportada sola
-    //
-    // paginaIzquierda(n) = la página izquierda del spread que contiene la página n
-    function paginaIzquierda(n) {
-        if (n <= 1) return 1;               // portada
-        if (n % 2 === 0) return n;          // página par → ya es izquierda del spread
-        return n - 1;                       // página impar → izquierda es n-1
+    /* ── Número de página sobre canvas ── */
+    function dibujarNumPag(canvas, pag, total, cfg) {
+        if(!cfg||!cfg.mostrar) return;
+        const ctx=canvas.getContext('2d'),pad=15,fs=Math.max(cfg.tamanio||14,canvas.width*0.015),txt=pag+' / '+total;
+        ctx.font='bold '+fs+'px Arial,sans-serif'; ctx.textBaseline='bottom';
+        const pos=cfg.posicion||'inferior-derecha'; let x,y;
+        if(pos==='inferior-derecha'){ctx.textAlign='right';x=canvas.width-pad;y=canvas.height-pad;}
+        else if(pos==='inferior-izquierda'){ctx.textAlign='left';x=pad;y=canvas.height-pad;}
+        else if(pos==='inferior-centro'){ctx.textAlign='center';x=canvas.width/2;y=canvas.height-pad;}
+        else if(pos==='superior-derecha'){ctx.textAlign='right';x=canvas.width-pad;y=pad+fs;}
+        else if(pos==='superior-izquierda'){ctx.textAlign='left';x=pad;y=pad+fs;}
+        else if(pos==='superior-centro'){ctx.textAlign='center';x=canvas.width/2;y=pad+fs;}
+        else{ctx.textAlign='center';x=canvas.width/2;y=canvas.height/2+fs/2;}
+        const mw=ctx.measureText(txt).width,mh=fs+4;
+        let bx,by;
+        if(pos==='inferior-derecha'){bx=canvas.width-mw-pad-4;by=canvas.height-mh-pad;}
+        else if(pos==='inferior-izquierda'){bx=pad-4;by=canvas.height-mh-pad;}
+        else if(pos==='inferior-centro'){bx=canvas.width/2-mw/2-4;by=canvas.height-mh-pad;}
+        else if(pos==='superior-derecha'){bx=canvas.width-mw-pad-4;by=pad-4;}
+        else if(pos==='superior-izquierda'){bx=pad-4;by=pad-4;}
+        else if(pos==='superior-centro'){bx=canvas.width/2-mw/2-4;by=pad-4;}
+        else{bx=canvas.width/2-mw/2-4;by=canvas.height/2-mh/2;}
+        const rgb=hexRgb(cfg.colorFondo||'#FFFFFF');
+        ctx.fillStyle='rgba('+rgb.r+','+rgb.g+','+rgb.b+','+(cfg.opacidadFondo||0.8)+')';
+        ctx.fillRect(bx,by,mw+8,mh+4); ctx.fillStyle=cfg.colorNumero||'#666666'; ctx.fillText(txt,x,y);
     }
+    function hexRgb(h){const r=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);return r?{r:parseInt(r[1],16),g:parseInt(r[2],16),b:parseInt(r[3],16)}:{r:102,g:102,b:102};}
 
-    function irA(n, animar = true) {
-        if (!pdfDoc) return;
+    /* ── Navegación ── */
+    function irA(n) {
+        if (!pageFlip) return;
         if (n < 1) n = 1;
         if (n > totalPags) n = totalPags;
-        n = paginaIzquierda(n);
-
-        if (enRender || animando) {
-            pendiente = { n };
-            return;
-        }
-
-        const anterior = pagActual;
-        let animMode = 'none';
-        if ( animar && n !== anterior ) {
-            if ( anterior === 1 && n === 2 ) {
-                animMode = 'cover-open';
-            } else if ( anterior === 2 && n === 1 ) {
-                // Volver a portada sin animación evita una "tapa" invertida artificial.
-                animMode = 'none';
-            } else if ( !esPortada( anterior ) && !esPortada( n ) ) {
-                animMode = 'normal';
-            }
-        }
-
+        // StPageFlip usa índice 0-based
+        pageFlip.flip(n - 1);
         pagActual = n;
-        renderSpread(n, animMode, n > anterior ? 'adelante' : 'atras');
+        inpPag.value = n;
+        actualizarBotones();
     }
 
     function actualizarBotones() {
         const inicio = pagActual <= 1;
-        // Fin: estamos en el último spread (página izquierda del último spread)
-        const ultimaIzq = paginaIzquierda(totalPags);
-        const fin = pagActual >= ultimaIzq;
+        const fin    = pagActual >= totalPags;
         flechaIzq.disabled = inicio;
         flechaDer.disabled = fin;
         btnFirst.disabled  = inicio;
         btnPrev.disabled   = inicio;
         btnNext.disabled   = fin;
         btnLast.disabled   = fin;
-        inpPag.value = pagActual;
     }
 
-    // Navegación: desde portada (1) el siguiente es página 2; desde spread 2-3 el siguiente es 4, etc.
-    function paginaSiguiente() {
-        if (pagActual === 1) return 2;      // portada → primer spread
-        return pagActual + 2;               // spread → spread siguiente
-    }
-    function paginaAnterior() {
-        if (pagActual <= 2) return 1;       // primer spread o portada → portada
-        return pagActual - 2;              // spread → spread anterior
-    }
-
-    flechaIzq.onclick = () => irA(paginaAnterior());
-    flechaDer.onclick = () => irA(paginaSiguiente());
+    flechaIzq.onclick = () => pageFlip && pageFlip.flipPrev();
+    flechaDer.onclick = () => pageFlip && pageFlip.flipNext();
     btnFirst.onclick  = () => irA(1);
     btnLast.onclick   = () => irA(totalPags);
-    btnPrev.onclick   = () => irA(paginaAnterior());
-    btnNext.onclick   = () => irA(paginaSiguiente());
+    btnPrev.onclick   = () => pageFlip && pageFlip.flipPrev();
+    btnNext.onclick   = () => pageFlip && pageFlip.flipNext();
 
     inpPag.addEventListener('change', () => { const n=parseInt(inpPag.value); if(!isNaN(n)) irA(n); });
     inpPag.addEventListener('keypress', e => { if(e.key==='Enter'){const n=parseInt(inpPag.value);if(!isNaN(n))irA(n);} });
 
     document.addEventListener('keydown', e => {
-        if (e.key==='ArrowLeft')  irA(paginaAnterior());
-        if (e.key==='ArrowRight') irA(paginaSiguiente());
+        if (e.key==='ArrowLeft')  { if(pageFlip) pageFlip.flipPrev(); }
+        if (e.key==='ArrowRight') { if(pageFlip) pageFlip.flipNext(); }
         if (e.key==='Home')       irA(1);
         if (e.key==='End')        irA(totalPags);
     });
@@ -1463,11 +1219,15 @@ body { display: flex; flex-direction: column; }
         else document.exitFullscreen();
     };
 
-    /* ── Re-render al redimensionar ── */
+    /* ── Ajuste al redimensionar ── */
     let resizeTimer;
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => renderSpread(pagActual, false), 180);
+        resizeTimer = setTimeout(() => {
+            if (pageFlip && pageFlip.update) {
+                pageFlip.update();
+            }
+        }, 200);
     });
 
 })();

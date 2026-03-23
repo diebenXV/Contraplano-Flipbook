@@ -76,7 +76,22 @@
     position: absolute;
     top: 0;
     left: 0;
-    pointer-events: all;
+    z-index: 20;
+    pointer-events: none;
+}
+
+.flipbook-overlay {
+    pointer-events: auto;
+}
+
+.flipbook-overlays img,
+.flipbook-overlays iframe,
+.flipbook-overlays svg {
+    max-width: none !important;
+}
+
+.flipbook-overlays iframe {
+    display: block;
 }
 
 .flipbook-audio-overlay {

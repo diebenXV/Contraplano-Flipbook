@@ -65,6 +65,12 @@
             }, 120 );
         });
 
+        if ( canvasWrapper ) {
+            canvasWrapper.addEventListener( 'scroll', function () {
+                posicionarCapaOverlays();
+            } );
+        }
+
         function irA( n ) {
             if ( n < 1 || n > total || ! pdfDoc ) return;
             ultimaDireccion = n > paginaActual ? 'next' : 'prev';
@@ -96,14 +102,22 @@
                 canvas.height = vp.height;
                 capaOverlays.style.width  = vp.width  + 'px';
                 capaOverlays.style.height = vp.height + 'px';
+                posicionarCapaOverlays();
 
                 pag.render({ canvasContext: canvas.getContext( '2d' ), viewport: vp })
                    .promise.then( () => {
                        if ( token !== renderToken ) return;
+                       posicionarCapaOverlays();
                        dibujarNumeroPagina( canvas, num, total, configNumeros );
                        renderizarOverlays( num, vp.width, vp.height );
                    });
             });
+        }
+
+        function posicionarCapaOverlays() {
+            if ( ! canvasWrapper || ! canvas || ! capaOverlays ) return;
+            capaOverlays.style.left = canvas.offsetLeft + 'px';
+            capaOverlays.style.top  = canvas.offsetTop  + 'px';
         }
 
         function aplicarAnimacionCambio( direccion ) {
@@ -146,6 +160,8 @@
             wrap.style.cssText =
                 `position:absolute;left:${left}px;top:${top}px;`
               + `width:${ancho}px;height:${alto}px;overflow:hidden;border-radius:4px;`;
+                        wrap.classList.add( 'flipbook-overlay' );
+                        wrap.classList.add( 'flipbook-overlay-' + ov.tipo );
 
             const d = ov.datos || {};
 
@@ -188,6 +204,10 @@
                 iframe.style.cssText   = 'width:100%;height:100%;border:none;';
                 iframe.allow           = 'accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture';
                 iframe.allowFullscreen = true;
+                iframe.loading         = 'eager';
+                iframe.classList.add( 'skip-lazy', 'no-lazy' );
+                iframe.setAttribute( 'data-no-lazy', '1' );
+                iframe.setAttribute( 'data-skip-lazy', '1' );
                 wrap.appendChild( iframe );
             }
         }

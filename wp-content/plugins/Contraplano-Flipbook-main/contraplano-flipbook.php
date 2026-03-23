@@ -2,7 +2,7 @@
 /*
 Plugin Name: Contraplano Flipbook
 Description: Editor interactivo de PDF tipo flipbook con soporte para video YouTube, audio, imágenes y presentaciones tipo slider. Comprime el PDF al cargarlo.
-Version: 3.4
+Version: 3.5
 Author: Diego Montecinos y Maverick Valdes
 */
 
@@ -28,6 +28,8 @@ register_deactivation_hook( __FILE__, 'flipbook_desactivar' );
 /**
  * Se ejecuta al activar el plugin.
  * Crea la tabla de base de datos para almacenar los overlays.
+ * Se creara apenas activar el plugin.
+ * Si el plugin se desactiva o borra la tabla en la DB seguira ahi.
  */
 function flipbook_activar() {
     global $wpdb;
