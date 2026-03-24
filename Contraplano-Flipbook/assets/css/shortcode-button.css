@@ -1,0 +1,40 @@
+/**
+ * Estilos para el botón del shortcode en el editor de WordPress
+ */
+
+/* Botón del flipbook en TinyMCE */
+.mce-btn.icon-flipbook::before {
+    content: "📖";
+    display: inline-block;
+    margin-right: 4px;
+    font-size: 16px;
+}
+
+/* Icono del botón */
+i.mce-i-flipbook::before {
+    content: "📖";
+    font-size: 16px;
+}
+
+/* Estilo del diálogo */
+.mce-window {
+    background: #fff;
+}
+
+.mce-window .mce-title {
+    background: #1cbfb8;
+    color: white;
+    font-weight: bold;
+}
+
+#flipbook-selector {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+}
+
+#flipbook-selector:focus {
+    outline: none;
+    border-color: #1cbfb8;
+    box-shadow: 0 0 3px rgba(28, 191, 184, 0.5);
+}
