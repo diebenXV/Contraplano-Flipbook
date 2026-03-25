@@ -24,7 +24,7 @@ class Flipbook_Admin {
         // Menú principal
         add_menu_page(
             'Contraplano Flipbook',
-            'Flipbooks',
+            'Flipbooks Ediciones',
             'edit_posts',
             'flipbook-lista',
             [ __CLASS__, 'pagina_lista' ],

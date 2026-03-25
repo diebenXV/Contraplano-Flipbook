@@ -225,7 +225,14 @@
 
             pageFlip.loadFromImages(images);
 
-            // Evento flip — actualizar UI y overlays
+            // Limpiar overlays inmediatamente — antes del giro
+            function limpiarOverlays() {
+                capaOverlays.querySelectorAll('audio').forEach(a => a.pause());
+                capaOverlays.innerHTML = '';
+                if (audioActual) { audioActual.pause(); audioActual = null; }
+            }
+
+            // Evento flip — se dispara al TERMINAR la animacion -> mostrar nuevos overlays
             pageFlip.on('flip', (e) => {
                 const numLeft = e.data + 1;
                 if (paginaActualEl) paginaActualEl.textContent = numLeft;
@@ -238,9 +245,18 @@
                 setTimeout(ajustarCapaOverlays, 60);
             });
 
-            // Navegación
-            if (btnAnt) btnAnt.addEventListener('click', function () { if (pageFlip) pageFlip.flipPrev(); });
-            if (btnSig) btnSig.addEventListener('click', function () { if (pageFlip) pageFlip.flipNext(); });
+            // Cuando el usuario EMPIEZA a arrastrar la pagina con el mouse/dedo,
+            // limpiar overlays inmediatamente para que no floten sobre la animacion
+            pageFlip.on('changeState', (e) => {
+                // 'user_fold' = usuario arrastrando, 'flipping' = animacion automatica
+                if (e.data === 'user_fold' || e.data === 'flipping') {
+                    limpiarOverlays();
+                }
+            });
+
+            // Navegacion — limpiar overlays ANTES del giro
+            if (btnAnt) btnAnt.addEventListener('click', function () { limpiarOverlays(); if (pageFlip) pageFlip.flipPrev(); });
+            if (btnSig) btnSig.addEventListener('click', function () { limpiarOverlays(); if (pageFlip) pageFlip.flipNext(); });
 
             const btnInicio = contenedor.querySelector('.flipbook-inicio');
             if (btnInicio) btnInicio.onclick = () => pageFlip.flip(0);
