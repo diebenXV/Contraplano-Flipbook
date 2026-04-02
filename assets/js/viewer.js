@@ -1,3 +1,6 @@
+/**
+ * viewer.js — Contraplano Flipbook
+ */
 (function () {
     'use strict';
 
@@ -9,62 +12,151 @@
         if (!datos) return;
 
         const canvasWrapper = contenedor.querySelector('.flipbook-canvas-wrapper');
-        let capaOverlays = contenedor.querySelector('.flipbook-overlays');
         const paginaActualEl = contenedor.querySelector('.flipbook-pagina-actual');
-        const btnAnt = contenedor.querySelector('.flipbook-anterior');
-        const btnSig = contenedor.querySelector('.flipbook-siguiente');
         const btnZoomIn = contenedor.querySelector('.btn-zoom-in');
         const btnZoomOut = contenedor.querySelector('.btn-zoom-out');
         const btnZoomReset = contenedor.querySelector('.btn-zoom-reset');
-        const btnFullscreen = contenedor.querySelector('.btn-fullscreen');
-        const zoomViewport = contenedor.querySelector('.flipbook-zoom-viewport');
 
         const configNumeros = datos.config_numeros || {};
 
         let pageFlip = null;
         let audioActual = null;
-        let zoomLevel = 1;
-        const ZOOM_MIN = 1;
-        const ZOOM_MAX = 3;
-        const ZOOM_STEP = 0.4;
+        let zoomActivo = false;
+        const ZOOM_AMP = 2.5;
+        let zoomCx = 0, zoomCy = 0, panX = 0, panY = 0;
 
-        // ── PDF.js ────────────────────────────────────────────────────────
+        let flechaIzq = null;
+        let flechaDer = null;
+
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-        // ── Zoom ──────────────────────────────────────────────────────────
-        function aplicarZoom(nivel) {
-            zoomLevel = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nivel));
-            const target = zoomViewport || canvasWrapper;
-            if (target) {
-                target.style.transform = 'scale(' + zoomLevel + ')';
-                target.style.transformOrigin = 'top center';
-            }
+        // ── Zoom estilo Paperturn (lupa → click → zoom at point → drag to pan) ──
+        function aplicarZoom(animate) {
+            var S = ZOOM_AMP;
+            var tx = zoomCx * (1 - S) + panX;
+            var ty = zoomCy * (1 - S) + panY;
+            canvasWrapper.style.transformOrigin = '0 0';
+            canvasWrapper.style.transition = animate ? 'transform .25s ease' : 'none';
+            canvasWrapper.style.transform = 'matrix(' + S + ',0,0,' + S + ',' + tx + ',' + ty + ')';
         }
+
+        function zoomInAt(cx, cy) {
+            zoomActivo = true;
+            zoomCx = cx; zoomCy = cy;
+            panX = 0; panY = 0;
+            aplicarZoom(true);
+        }
+
+        function zoomOutReset() {
+            zoomActivo = false;
+            panX = 0; panY = 0;
+            canvasWrapper.style.transition = 'transform .25s ease';
+            canvasWrapper.style.transform = 'scale(1)';
+            canvasWrapper.style.transformOrigin = '0 0';
+        }
+
+        function toggleZoom(e) {
+            if (e) e.stopPropagation();
+            if (zoomActivo) { zoomOutReset(); }
+            else { var r = canvasWrapper.getBoundingClientRect(); zoomInAt(r.width / 2, r.height / 2); }
+        }
+        function resetZoom() { zoomOutReset(); }
+
+        if (btnZoomIn) btnZoomIn.addEventListener('click', toggleZoom);
+        if (btnZoomOut) btnZoomOut.addEventListener('click', toggleZoom);
+        if (btnZoomReset) btnZoomReset.addEventListener('click', resetZoom);
 
         function iniciarZoomDesktop(flipEl) {
             if (!flipEl) return;
-            let lastClick = 0;
+
+            var clickStartX = 0, clickStartY = 0;
+            var isDragging = false;
+            var dragStartX = 0, dragStartY = 0, panStartX = 0, panStartY = 0;
+
+            flipEl.style.cursor = 'zoom-in';
+
+            // Bordes: cursor grab (arrastrar hoja), centro: zoom-in
+            flipEl.addEventListener('mousemove', function (e) {
+                if (zoomActivo || isDragging) return;
+                var rect = flipEl.getBoundingClientRect();
+                var x = e.clientX - rect.left;
+                var w = rect.width;
+                flipEl.style.cursor = (x < w * 0.15 || x > w * 0.85) ? 'grab' : 'zoom-in';
+            }, true);
+
+            // Capture phase: fires BEFORE .stf__parent blocker
+            flipEl.addEventListener('mousedown', function (e) {
+                clickStartX = e.clientX;
+                clickStartY = e.clientY;
+                if (zoomActivo) {
+                    isDragging = true;
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
+                    panStartX = panX;
+                    panStartY = panY;
+                    flipEl.style.cursor = 'grabbing';
+                    e.preventDefault();
+                }
+            }, true);
+
+            // Capture phase on document: pan while zoomed
+            document.addEventListener('mousemove', function (e) {
+                if (!isDragging || !zoomActivo) return;
+                panX = panStartX + (e.clientX - dragStartX);
+                panY = panStartY + (e.clientY - dragStartY);
+                aplicarZoom(false);
+            }, true);
+
+            document.addEventListener('mouseup', function () {
+                if (isDragging) {
+                    isDragging = false;
+                    if (zoomActivo) flipEl.style.cursor = 'grab';
+                }
+            }, true);
+
+            // Click: bubble phase (click propagates independently of mousedown blocking)
             flipEl.addEventListener('click', function (e) {
                 if (e.target.closest('.fb-ov') || e.target.closest('.flipbook-overlay')) return;
-                const now = Date.now();
-                if (now - lastClick < 300) {
-                    aplicarZoom(ZOOM_MIN);
-                } else {
-                    aplicarZoom(zoomLevel >= ZOOM_MAX ? ZOOM_MIN : zoomLevel + ZOOM_STEP);
+
+                var dist = Math.hypot(e.clientX - clickStartX, e.clientY - clickStartY);
+                if (dist > 5) return;
+
+                if (zoomActivo) {
+                    zoomOutReset();
+                    flipEl.style.cursor = 'zoom-in';
+                    return;
                 }
-                lastClick = now;
+
+                var rect = flipEl.getBoundingClientRect();
+                var x = e.clientX - rect.left;
+                var w = rect.width;
+
+                if (x > w * 0.85) {
+                    e.stopPropagation();
+                    pageFlip.flipNext();
+                } else if (x < w * 0.15) {
+                    e.stopPropagation();
+                    pageFlip.flipPrev();
+                } else {
+                    var wrapRect = canvasWrapper.getBoundingClientRect();
+                    zoomInAt(e.clientX - wrapRect.left, e.clientY - wrapRect.top);
+                    flipEl.style.cursor = 'grab';
+                }
             });
         }
 
         function iniciarGestosMovil(flipEl) {
             if (!flipEl) return;
-            let lastTap = 0, initDist = 0, initZoom = 1;
+            let lastTap = 0, initDist = 0, initZoom = 1, curZoom = 1;
 
             flipEl.addEventListener('touchend', function (e) {
                 if (e.touches.length > 0) return;
                 const now = Date.now();
                 if (now - lastTap < 300) {
-                    aplicarZoom(zoomLevel > ZOOM_MIN + 0.1 ? ZOOM_MIN : ZOOM_MIN + ZOOM_STEP * 2);
+                    zoomActivo = !zoomActivo;
+                    curZoom = zoomActivo ? ZOOM_AMP : 1;
+                    canvasWrapper.style.transform = 'scale(' + curZoom + ')';
+                    canvasWrapper.style.transformOrigin = 'top center';
                     e.preventDefault();
                 }
                 lastTap = now;
@@ -72,45 +164,20 @@
 
             flipEl.addEventListener('touchstart', function (e) {
                 if (e.touches.length === 2) {
-                    initDist = Math.hypot(
-                        e.touches[0].clientX - e.touches[1].clientX,
-                        e.touches[0].clientY - e.touches[1].clientY
-                    );
-                    initZoom = zoomLevel;
-                    e.preventDefault();
+                    initDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                    initZoom = curZoom; e.preventDefault();
                 }
             }, { passive: false });
 
             flipEl.addEventListener('touchmove', function (e) {
                 if (e.touches.length === 2 && initDist > 0) {
-                    const dist = Math.hypot(
-                        e.touches[0].clientX - e.touches[1].clientX,
-                        e.touches[0].clientY - e.touches[1].clientY
-                    );
-                    aplicarZoom(initZoom * (dist / initDist));
+                    const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                    curZoom = Math.max(1, Math.min(3, initZoom * (dist / initDist)));
+                    canvasWrapper.style.transform = 'scale(' + curZoom + ')';
+                    canvasWrapper.style.transformOrigin = 'top center';
                     e.preventDefault();
                 }
             }, { passive: false });
-
-            flipEl.addEventListener('touchend', function (e) {
-                if (e.touches.length < 2) initDist = 0;
-            });
-        }
-
-        // ── Botones de zoom ───────────────────────────────────────────────
-        if (btnZoomIn)    btnZoomIn.addEventListener('click',    function () { aplicarZoom(zoomLevel + ZOOM_STEP); });
-        if (btnZoomOut)   btnZoomOut.addEventListener('click',   function () { aplicarZoom(zoomLevel - ZOOM_STEP); });
-        if (btnZoomReset) btnZoomReset.addEventListener('click', function () { aplicarZoom(ZOOM_MIN); });
-
-        // ── Pantalla completa ─────────────────────────────────────────────
-        if (btnFullscreen) {
-            btnFullscreen.addEventListener('click', function () {
-                if (!document.fullscreenElement) {
-                    contenedor.requestFullscreen().catch(function () {});
-                } else {
-                    document.exitFullscreen();
-                }
-            });
         }
 
         // ── Número de página ──────────────────────────────────────────────
@@ -119,20 +186,20 @@
             const ctx = cv.getContext('2d'), pad = 15, fs = Math.max(cfg.tamanio || 14, cv.width * 0.015), txt = pag + ' / ' + tot;
             ctx.font = 'bold ' + fs + 'px Arial,sans-serif'; ctx.textBaseline = 'bottom';
             const pos = cfg.posicion || 'inferior-derecha'; let x, y;
-            if      (pos === 'inferior-derecha')   { ctx.textAlign = 'right';  x = cv.width - pad; y = cv.height - pad; }
-            else if (pos === 'inferior-izquierda') { ctx.textAlign = 'left';   x = pad;            y = cv.height - pad; }
-            else if (pos === 'inferior-centro')    { ctx.textAlign = 'center'; x = cv.width / 2;   y = cv.height - pad; }
-            else if (pos === 'superior-derecha')   { ctx.textAlign = 'right';  x = cv.width - pad; y = pad + fs; }
-            else if (pos === 'superior-izquierda') { ctx.textAlign = 'left';   x = pad;            y = pad + fs; }
-            else if (pos === 'superior-centro')    { ctx.textAlign = 'center'; x = cv.width / 2;   y = pad + fs; }
+            if (pos === 'inferior-derecha') { ctx.textAlign = 'right'; x = cv.width - pad; y = cv.height - pad; }
+            else if (pos === 'inferior-izquierda') { ctx.textAlign = 'left'; x = pad; y = cv.height - pad; }
+            else if (pos === 'inferior-centro') { ctx.textAlign = 'center'; x = cv.width / 2; y = cv.height - pad; }
+            else if (pos === 'superior-derecha') { ctx.textAlign = 'right'; x = cv.width - pad; y = pad + fs; }
+            else if (pos === 'superior-izquierda') { ctx.textAlign = 'left'; x = pad; y = pad + fs; }
+            else if (pos === 'superior-centro') { ctx.textAlign = 'center'; x = cv.width / 2; y = pad + fs; }
             else { ctx.textAlign = 'center'; x = cv.width / 2; y = cv.height / 2 + fs / 2; }
             const mw = ctx.measureText(txt).width, mh = fs + 4; let bx, by;
-            if      (pos === 'inferior-derecha')   { bx = cv.width - mw - pad - 4; by = cv.height - mh - pad; }
-            else if (pos === 'inferior-izquierda') { bx = pad - 4;                 by = cv.height - mh - pad; }
-            else if (pos === 'inferior-centro')    { bx = cv.width / 2 - mw / 2 - 4; by = cv.height - mh - pad; }
-            else if (pos === 'superior-derecha')   { bx = cv.width - mw - pad - 4; by = pad - 4; }
-            else if (pos === 'superior-izquierda') { bx = pad - 4;                 by = pad - 4; }
-            else if (pos === 'superior-centro')    { bx = cv.width / 2 - mw / 2 - 4; by = pad - 4; }
+            if (pos === 'inferior-derecha') { bx = cv.width - mw - pad - 4; by = cv.height - mh - pad; }
+            else if (pos === 'inferior-izquierda') { bx = pad - 4; by = cv.height - mh - pad; }
+            else if (pos === 'inferior-centro') { bx = cv.width / 2 - mw / 2 - 4; by = cv.height - mh - pad; }
+            else if (pos === 'superior-derecha') { bx = cv.width - mw - pad - 4; by = pad - 4; }
+            else if (pos === 'superior-izquierda') { bx = pad - 4; by = pad - 4; }
+            else if (pos === 'superior-centro') { bx = cv.width / 2 - mw / 2 - 4; by = pad - 4; }
             else { bx = cv.width / 2 - mw / 2 - 4; by = cv.height / 2 - mh / 2; }
             const rgb = hexRgb(cfg.colorFondo || '#FFFFFF');
             ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',' + (cfg.opacidadFondo || 0.8) + ')';
@@ -147,39 +214,76 @@
         }
 
         function mezclar(arr) {
-            for (let i = arr.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [arr[i], arr[j]] = [arr[j], arr[i]];
-            }
-            return arr;
+            for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[arr[i], arr[j]] = [arr[j], arr[i]]; } return arr;
         }
 
-        // ── Normalizar datos del overlay ──────────────────────────────────
-        // El shortcode hace array_merge añadiendo x,y,w,h a los datos del overlay.
-        // Esta función garantiza que siempre tengamos x,y,w,h disponibles en d,
-        // tomándolos del nivel raíz del overlay si no están en datos.
+        // ── Normalizar datos ──────────────────────────────────────────────
         function normalizarDatos(ov) {
             let d = ov.datos;
-            if (typeof d === 'string') {
-                try { d = JSON.parse(d); } catch (e) { d = {}; }
-            }
+            if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = {}; } }
             if (!d || typeof d !== 'object') d = {};
 
             if (d.x === undefined || d.x === null) d.x = parseFloat(ov.pos_left) || 0;
-            if (d.y === undefined || d.y === null) d.y = parseFloat(ov.pos_top)  || 0;
-            if (d.w === undefined || d.w === null) d.w = parseFloat(ov.ancho)    || 10;
-            if (d.h === undefined || d.h === null) d.h = parseFloat(ov.alto)     || 10;
+            if (d.y === undefined || d.y === null) d.y = parseFloat(ov.pos_top) || 0;
+            if (d.w === undefined || d.w === null) d.w = parseFloat(ov.ancho) || 10;
+            if (d.h === undefined || d.h === null) d.h = parseFloat(ov.alto) || 10;
 
             return d;
+        }
+
+        // ── Inyectar overlays DENTRO de cada página (como el editor) ──
+        function inyectarOverlaysEnPagina(pageDiv, numPag, lista) {
+            var items = (lista || []).filter(function (o) { return parseInt(o.pagina) === numPag; });
+            if (!items.length) return;
+
+            var capa = document.createElement('div');
+            capa.className = 'fb-ov-layer';
+            capa.style.cssText = 'position:absolute;inset:0;z-index:20;pointer-events:none;';
+
+            items.forEach(function (ov) {
+                var d = normalizarDatos(ov);
+                var left = parseFloat(d.x) || 0;
+                var top = parseFloat(d.y) || 0;
+                var ancho = parseFloat(d.w) || 10;
+                var alto = parseFloat(d.h) || 10;
+                if (ancho < 0.5 || alto < 0.5) return;
+
+                var wrap = document.createElement('div');
+                wrap.className = 'flipbook-overlay fb-ov';
+                wrap.style.cssText = 'position:absolute;left:' + left + '%;top:' + top + '%;width:' + ancho + '%;height:' + alto + '%;pointer-events:auto;overflow:hidden;border-radius:4px;z-index:25;';
+
+                switch (ov.tipo) {
+                    case 'imagen': buildImagen(wrap, d); break;
+                    case 'youtube':
+                    case 'video': buildYoutube(wrap, d); break;
+                    case 'audio': buildAudio(wrap, d); break;
+                    case 'link': buildLink(wrap, d); break;
+                    case 'presentacion': buildSlide(wrap, d); break;
+                }
+                capa.appendChild(wrap);
+            });
+
+            pageDiv.appendChild(capa);
         }
 
         try {
             const pdf = await pdfjsLib.getDocument(datos.pdf_url).promise;
             const images = [];
 
-            // Renderizar páginas
+            // Variables para guardar el tamaño real del PDF
+            let pdfAnchoReal = 550;
+            let pdfAltoReal = 733;
+
             for (let i = 1; i <= datos.paginas; i++) {
                 const page = await pdf.getPage(i);
+
+                // Obtener dimensiones reales de la primera página para mantener la proporción
+                if (i === 1) {
+                    const vpReal = page.getViewport({ scale: 1 });
+                    pdfAnchoReal = vpReal.width;
+                    pdfAltoReal = vpReal.height;
+                }
+
                 const viewport = page.getViewport({ scale: 1.5 });
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
@@ -192,195 +296,235 @@
                 images.push(canvas.toDataURL('image/jpeg', 0.8));
             }
 
-            // Limpiar wrapper y crear target para PageFlip
+            // ── Crear divs de página con overlays embebidos (como el editor) ──
+            var W = Math.round(pdfAnchoReal * 1.5);
+            var H = Math.round(pdfAltoReal * 1.5);
+            var pageDivs = [];
+            for (var pi = 0; pi < images.length; pi++) {
+                var pageDiv = document.createElement('div');
+                pageDiv.className = 'fb-page-item';
+                pageDiv.style.cssText = 'width:' + W + 'px;height:' + H + 'px;overflow:hidden;position:relative;background:#fff;';
+                var img = document.createElement('img');
+                img.src = images[pi];
+                img.style.cssText = 'display:block;width:100%;height:100%;pointer-events:none;';
+                pageDiv.appendChild(img);
+                // Inyectar overlays de esta página DENTRO del div
+                inyectarOverlaysEnPagina(pageDiv, pi + 1, datos.overlays);
+                pageDivs.push(pageDiv);
+            }
+
             const targetDiv = document.createElement('div');
             targetDiv.id = 'flip-target-' + flipbookId;
             canvasWrapper.innerHTML = '';
+            // Agregar pageDivs al target antes de StPageFlip
+            pageDivs.forEach(function (pd) { targetDiv.appendChild(pd); });
             canvasWrapper.appendChild(targetDiv);
 
-            // Recrear capa de overlays
-            const nuevaCapaOverlays = document.createElement('div');
-            nuevaCapaOverlays.className = 'flipbook-overlays';
-            nuevaCapaOverlays.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; z-index:10; pointer-events:none;';
-            canvasWrapper.appendChild(nuevaCapaOverlays);
-            capaOverlays = nuevaCapaOverlays;
+            // ── Flechas flotantes y Fullscreen ─────────────────────────────
+            flechaIzq = document.createElement('button');
+            flechaIzq.className = 'fb-flecha fb-flecha-izq';
+            flechaIzq.innerHTML = '&#8249;';
+
+            flechaDer = document.createElement('button');
+            flechaDer.className = 'fb-flecha fb-flecha-der';
+            flechaDer.innerHTML = '&#8250;';
+
+            canvasWrapper.appendChild(flechaIzq);
+            canvasWrapper.appendChild(flechaDer);
+
+            // En móvil ocultar flechas — se pasa página arrastrando con el dedo
+            if (ES_MOVIL) {
+                flechaIzq.style.display = 'none';
+                flechaDer.style.display = 'none';
+            }
+
+            const btnFsFlotante = document.createElement('button');
+            btnFsFlotante.className = 'fb-btn-fs-flotante';
+            btnFsFlotante.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Full screen';
+            btnFsFlotante.style.opacity = '0';
+            btnFsFlotante.style.transition = 'opacity .3s';
+            canvasWrapper.appendChild(btnFsFlotante);
+
+            // Solo mostrar el botón fullscreen cuando el mouse está sobre el flipbook
+            if (!ES_MOVIL) {
+                contenedor.addEventListener('mouseenter', function () {
+                    btnFsFlotante.style.opacity = '1';
+                });
+                contenedor.addEventListener('mouseleave', function () {
+                    btnFsFlotante.style.opacity = '0';
+                });
+            } else {
+                btnFsFlotante.style.opacity = '1';
+            }
+
+            btnFsFlotante.addEventListener('click', function () {
+                if (!document.fullscreenElement) contenedor.requestFullscreen().catch(function () { });
+                else document.exitFullscreen();
+            });
+
+            // Ya no necesitamos capa flotante de overlays — están embebidos en cada página
 
             const target = document.getElementById('flip-target-' + flipbookId);
 
-            // Inicializar PageFlip
-            // showCover:true  → portada centrada sola al inicio
-            // usePortrait     → en móvil muestra 1 página a la vez
+            // ── Dimensiones móvil: calcular tamaño real basado en viewport ──
+            var mobileW = 0, mobileH = 0;
+            // AHORA USAMOS LA PROPORCIÓN REAL DEL PDF
+            var PAGE_RATIO = pdfAltoReal / pdfAnchoReal;
+
+            if (ES_MOVIL) {
+                // Dejamos un poco más de margen lateral (40px en total) para que respire
+                mobileW = window.innerWidth - 40;
+                mobileH = Math.round(mobileW * PAGE_RATIO);
+
+                // Limitamos la altura máxima al 75% de la pantalla para dejar espacio arriba/abajo
+                var maxH = window.innerHeight * 0.75;
+                if (mobileH > maxH) {
+                    mobileH = Math.round(maxH);
+                    mobileW = Math.round(mobileH / PAGE_RATIO);
+                }
+
+                target.style.width = mobileW + 'px';
+                target.style.height = mobileH + 'px';
+                target.style.margin = '0 auto';
+                canvasWrapper.style.height = (window.innerHeight * 0.85) + 'px'; // Forzamos altura al contenedor
+                canvasWrapper.style.padding = '0';
+                contenedor.style.height = 'auto';
+                void target.offsetWidth;
+            }
+
             pageFlip = new St.PageFlip(target, {
-                width: 550,
-                height: 733,
-                size: 'stretch',
+                width: ES_MOVIL ? mobileW : pdfAnchoReal,
+                height: ES_MOVIL ? mobileH : pdfAltoReal,
+                maxWidth: ES_MOVIL ? mobileW : 2000,
+                maxHeight: ES_MOVIL ? mobileH : 2000,
+                size: ES_MOVIL ? 'fixed' : 'stretch',
                 showCover: true,
                 maxShadowOpacity: 0.5,
                 mobileScrollSupport: false,
                 usePortrait: ES_MOVIL,
-                swipeDistance: ES_MOVIL ? 30 : 9999,
+                swipeDistance: ES_MOVIL ? 15 : 9999,
                 clickEventForward: false,
                 disableFlipByClick: true,
+                flippingTime: 400,
             });
 
-            pageFlip.loadFromImages(images);
+            pageFlip.loadFromHTML(targetDiv.querySelectorAll('.fb-page-item'));
 
-            // Limpiar overlays inmediatamente — antes del giro
-            function limpiarOverlays() {
-                capaOverlays.querySelectorAll('audio').forEach(a => a.pause());
-                capaOverlays.innerHTML = '';
+            // Drag-flip SÍ, corner fold NO.
+            // mousedown: pasa a StPageFlip para que inicie drag (bloquear solo si zoom)
+            // mousemove sin botón: bloquear (evita corner fold hover)
+            // mousemove con botón: pasar (la hoja sigue el cursor)
+            setTimeout(function () {
+                var stfParent = canvasWrapper.querySelector('.stf__parent');
+                if (stfParent && !ES_MOVIL) {
+                    var mouseDown = false;
+
+                    stfParent.addEventListener('mousedown', function (e) {
+                        mouseDown = true;
+                        if (zoomActivo) e.stopImmediatePropagation();
+                    }, true);
+
+                    document.addEventListener('mouseup', function () {
+                        mouseDown = false;
+                    }, true);
+
+                    stfParent.addEventListener('mousemove', function (e) {
+                        if (!mouseDown || zoomActivo) {
+                            e.stopImmediatePropagation();
+                        }
+                    }, true);
+                }
+            }, 100);
+
+            // ── Móvil: completar flip al arrastrar 33% del ancho ──
+            if (ES_MOVIL) {
+                setTimeout(function () {
+                    var stfEl = canvasWrapper.querySelector('.stf__parent');
+                    if (!stfEl) return;
+                    var touchStartX = 0;
+                    var pageW = mobileW || stfEl.offsetWidth;
+
+                    stfEl.addEventListener('touchstart', function (e) {
+                        if (e.touches.length === 1) {
+                            touchStartX = e.touches[0].clientX;
+                        }
+                    }, { passive: true });
+
+                    stfEl.addEventListener('touchend', function (e) {
+                        if (e.changedTouches.length === 0) return;
+                        var dx = e.changedTouches[0].clientX - touchStartX;
+                        var umbral = pageW * 0.33;
+                        if (Math.abs(dx) >= umbral) {
+                            if (dx < 0) pageFlip.flipNext();
+                            else pageFlip.flipPrev();
+                        }
+                    }, { passive: true });
+                }, 200);
+            }
+
+            function pausarAudios() {
+                targetDiv.querySelectorAll('audio').forEach(function (a) { a.pause(); });
                 if (audioActual) { audioActual.pause(); audioActual = null; }
             }
 
-            // Evento flip — se dispara al TERMINAR la animacion -> mostrar nuevos overlays
             pageFlip.on('flip', (e) => {
+                if (zoomActivo) zoomOutReset();
+                pausarAudios();
                 const numLeft = e.data + 1;
                 if (paginaActualEl) paginaActualEl.textContent = numLeft;
 
-                const inputPag = contenedor.querySelector('.flipbook-input-pagina');
-                if (inputPag) inputPag.value = numLeft;
+                flechaIzq.style.opacity = (e.data === 0) ? '0.25' : '';
+                flechaIzq.style.pointerEvents = (e.data === 0) ? 'none' : '';
+                flechaDer.style.opacity = (e.data >= datos.paginas - 1) ? '0.25' : '';
+                flechaDer.style.pointerEvents = (e.data >= datos.paginas - 1) ? 'none' : '';
 
-                const visibles = ES_MOVIL ? [numLeft] : [numLeft, numLeft + 1];
-                renderizarContenidoMultimedia(visibles, datos.overlays);
-                setTimeout(ajustarCapaOverlays, 60);
+                contenedor.classList.toggle('en-portada', e.data === 0);
+                contenedor.classList.toggle('en-contraportada', e.data >= datos.paginas - 1);
             });
 
-            // Cuando el usuario EMPIEZA a arrastrar la pagina con el mouse/dedo,
-            // limpiar overlays inmediatamente para que no floten sobre la animacion
             pageFlip.on('changeState', (e) => {
-                // 'user_fold' = usuario arrastrando, 'flipping' = animacion automatica
                 if (e.data === 'user_fold' || e.data === 'flipping') {
-                    limpiarOverlays();
+                    pausarAudios();
+                    contenedor.classList.remove('en-portada', 'en-contraportada');
+                    if (zoomActivo) zoomOutReset();
+                }
+                if (e.data === 'read') {
+                    var idx = pageFlip.getCurrentPageIndex();
+                    contenedor.classList.toggle('en-portada', idx === 0);
+                    contenedor.classList.toggle('en-contraportada', idx >= datos.paginas - 1);
                 }
             });
 
-            // Navegacion — limpiar overlays ANTES del giro
-            if (btnAnt) btnAnt.addEventListener('click', function () { limpiarOverlays(); if (pageFlip) pageFlip.flipPrev(); });
-            if (btnSig) btnSig.addEventListener('click', function () { limpiarOverlays(); if (pageFlip) pageFlip.flipNext(); });
-
-            const btnInicio = contenedor.querySelector('.flipbook-inicio');
-            if (btnInicio) btnInicio.onclick = () => pageFlip.flip(0);
-
-            const btnFin = contenedor.querySelector('.flipbook-fin');
-            if (btnFin) btnFin.onclick = () => pageFlip.flip(datos.paginas - 1);
-
-            const inputPagina = contenedor.querySelector('.flipbook-input-pagina');
-            if (inputPagina) {
-                inputPagina.onchange = (e) => {
-                    let p = parseInt(e.target.value);
-                    if (!isNaN(p) && p > 0 && p <= datos.paginas) {
-                        pageFlip.flip(p - 1);
-                    } else {
-                        e.target.value = pageFlip.getCurrentPageIndex() + 1;
-                    }
-                };
-            }
+            flechaIzq.addEventListener('click', function () { pausarAudios(); if (pageFlip) pageFlip.flipPrev(); });
+            flechaDer.addEventListener('click', function () { pausarAudios(); if (pageFlip) pageFlip.flipNext(); });
 
             document.addEventListener('keydown', (e) => {
-                if (e.key === 'ArrowLeft')  pageFlip.flipPrev();
+                if (e.key === 'ArrowLeft') pageFlip.flipPrev();
                 if (e.key === 'ArrowRight') pageFlip.flipNext();
             });
 
-            // Render inicial de overlays
+            flechaIzq.style.opacity = '0.25';
+            flechaIzq.style.pointerEvents = 'none';
+
             setTimeout(() => {
-                // Página 1 = portada centrada sola (showCover:true)
-                renderizarContenidoMultimedia([1], datos.overlays);
-                ajustarCapaOverlays();
+                contenedor.classList.add('en-portada');
             }, 500);
 
-            // Iniciar gestos de zoom
-            if (!ES_MOVIL) {
-                iniciarZoomDesktop(target);
-            } else {
-                iniciarGestosMovil(target);
-            }
+            if (!ES_MOVIL) iniciarZoomDesktop(target);
+            else iniciarGestosMovil(target);
 
         } catch (e) { console.error('Error al cargar flipbook:', e); }
 
-        // ── Resize ────────────────────────────────────────────────────────
-        let resizeTimer;
-        window.addEventListener('resize', () => {
-            clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(ajustarCapaOverlays, 200);
-        });
-
-        function ajustarCapaOverlays() {
-            // PageFlip genera un wrapper interno — buscar por ambas posibles clases
-            const bookElement = canvasWrapper.querySelector('.stf__parent') || canvasWrapper.querySelector('.stPageFlip');
-            if (bookElement && capaOverlays) {
-                capaOverlays.style.left   = bookElement.offsetLeft + 'px';
-                capaOverlays.style.top    = bookElement.offsetTop  + 'px';
-                capaOverlays.style.width  = bookElement.offsetWidth  + 'px';
-                capaOverlays.style.height = bookElement.offsetHeight + 'px';
-            }
-        }
-
-        // ── Renderizar overlays ───────────────────────────────────────────
-        function renderizarContenidoMultimedia(paginas, lista) {
-            capaOverlays.querySelectorAll('audio').forEach(a => a.pause());
-            capaOverlays.innerHTML = '';
-            if (audioActual) { audioActual.pause(); audioActual = null; }
-
-            if (!Array.isArray(paginas)) paginas = [paginas];
-
-            const bookElement = canvasWrapper.querySelector('.stf__parent') || canvasWrapper.querySelector('.stPageFlip');
-            let spreadW = 550, H = 733;
-            if (bookElement && bookElement.offsetWidth > 0) {
-                spreadW = bookElement.offsetWidth;
-                H = bookElement.offsetHeight;
-            }
-
-            // En móvil o cuando hay 1 sola página visible, el ancho de página = spreadW
-            const pageWidth = (ES_MOVIL || paginas.length === 1) ? spreadW : spreadW / 2;
-
-            const items = lista ? lista.filter(o => paginas.includes(parseInt(o.pagina))) : [];
-
-            items.forEach(ov => {
-                const pageNum = parseInt(ov.pagina);
-                const d = normalizarDatos(ov);
-
-                let leftPercent   = parseFloat(d.x) || 0;
-                let topPercent    = parseFloat(d.y) || 0;
-                let widthPercent  = parseFloat(d.w) || 10;
-                let heightPercent = parseFloat(d.h) || 10;
-
-                let leftPx    = (leftPercent   / 100) * pageWidth;
-                let topPx     = (topPercent    / 100) * H;
-                const anchoPx = (widthPercent  / 100) * pageWidth;
-                const altoPx  = (heightPercent / 100) * H;
-
-                // En desktop con spread de 2 páginas:
-                // La primera página del par va a la izquierda (sin offset)
-                // La segunda va a la derecha (offset + pageWidth)
-                if (!ES_MOVIL && paginas.length === 2 && pageNum !== paginas[0]) {
-                    leftPx = pageWidth + leftPx;
-                }
-
-                const div = document.createElement('div');
-                div.className = 'flipbook-overlay fb-ov';
-                div.style.cssText = `position:absolute; left:${leftPx}px; top:${topPx}px; width:${anchoPx}px; height:${altoPx}px; pointer-events:auto; overflow:hidden; border-radius:4px;`;
-
-                switch (ov.tipo) {
-                    case 'imagen':      buildImagen(div, d);   break;
-                    case 'youtube':
-                    case 'video':       buildYoutube(div, d);  break;
-                    case 'audio':       buildAudio(div, d);    break;
-                    case 'link':        buildLink(div, d);     break;
-                    case 'presentacion':buildSlide(div, d);    break;
-                }
-
-                capaOverlays.appendChild(div);
-            });
-        }
+        // (Overlays embebidos en páginas — no se necesita ajustarCapaOverlays ni renderizarContenidoMultimedia)
 
         // ── Builders ─────────────────────────────────────────────────────
         function buildAudio(wrap, d) {
             const iconColor = (d.iconColor && d.iconColor !== 'undefined') ? d.iconColor : '#ffffff';
-            const playPath  = 'M8 5v14l11-7z';
-            const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
+            const playPath = 'M8 5v14l11-7z', pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
             wrap.style.cssText += ';display:flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid rgba(255,255,255,.45);';
             const audio = document.createElement('audio');
             audio.src = d.url || ''; audio.preload = 'auto';
+            audio.style.display = 'none';
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('fill', iconColor);
             svg.setAttribute('width', '55%'); svg.setAttribute('height', '55%');
@@ -496,6 +640,5 @@
             return m ? m[1] : null;
         }
 
-        window.addEventListener('resize', () => setTimeout(ajustarCapaOverlays, 300));
     });
 })();

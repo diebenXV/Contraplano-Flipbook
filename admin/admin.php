@@ -71,12 +71,6 @@ class Flipbook_Admin {
      * @param string $hook  Identificador de la página de administración activa.
      */
     public static function encolar_scripts( $hook ) {
-        // Solo cargar en las páginas del plugin
-        $paginas_validas = [
-            'toplevel_page_flipbook-lista',
-            'flipbooks_page_flipbook-editor',
-        ];
-
         // Deshabilitar caché de LiteSpeed en todas las páginas del plugin
         // para evitar que se cachee el nonce y cause errores AJAX
         if ( str_contains( $hook, 'flipbook' ) ) {
@@ -89,8 +83,7 @@ class Flipbook_Admin {
             // Encolar solo PDF.js y el visor para la página de preview
             wp_enqueue_script(
                 'pdfjs',
-                'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
-                [], '3.11.174', true
+                'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',[], '3.11.174', true
             );
             wp_enqueue_script(
                 'flipbook-viewer',
@@ -101,20 +94,23 @@ class Flipbook_Admin {
             );
             wp_enqueue_style(
                 'flipbook-preview-css',
-                FLIPBOOK_URL . 'assets/css/preview.css',
-                [],
+                FLIPBOOK_URL . 'assets/css/preview.css',[],
                 FLIPBOOK_VERSION
             );
             return;
         }
 
-        if ( ! in_array( $hook, $paginas_validas ) ) return;
+        // VERIFICACIÓN CORREGIDA:
+        // En lugar de usar un array con nombres exactos que fallan, 
+        // simplemente verificamos si el nombre de la página contiene "flipbook-lista" o "flipbook-editor".
+        if ( ! str_contains( $hook, 'flipbook-lista' ) && ! str_contains( $hook, 'flipbook-editor' ) ) {
+            return;
+        }
 
         // PDF.js — renderizado del PDF en el canvas del editor
         wp_enqueue_script(
             'pdfjs',
-            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
-            [], '3.11.174', true
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',[], '3.11.174', true
         );
 
         // Script principal del editor visual
@@ -129,8 +125,7 @@ class Flipbook_Admin {
         // Estilos del editor visual
         wp_enqueue_style(
             'flipbook-editor',
-            FLIPBOOK_URL . 'assets/css/editor.css',
-            [],
+            FLIPBOOK_URL . 'assets/css/editor.css',[],
             FLIPBOOK_VERSION
         );
 
@@ -153,7 +148,7 @@ class Flipbook_Admin {
             : '';
 
         // Pasar configuración inicial al JavaScript del editor
-        wp_localize_script( 'flipbook-editor', 'contraplanoFlipbookAdmin', [
+        wp_localize_script( 'flipbook-editor', 'contraplanoFlipbookAdmin',[
             'ajax_url'    => admin_url( 'admin-ajax.php' ),
             'nonce'       => wp_create_nonce( 'flipbook_nonce' ),
             'plugin_url'  => FLIPBOOK_URL,

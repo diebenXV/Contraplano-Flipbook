@@ -1,136 +1,131 @@
 /* ============================================================
-   viewer.css — Visor público de Flipbook (frontend)
-
-   Correcciones:
-   - El canvas-wrapper ahora usa flex:1 correctamente y tiene
-     min-height:0 para que el flex shrink funcione bien.
-   - Los overlays se posicionan con position:absolute relativo
-     al wrapper, no al canvas (el JS calcula el offset exacto).
-   - Se eliminan los estilos redundantes de media query que
-     redefinían cosas ya declaradas globalmente.
-   - Soporte correcto de pantalla completa para todos los
-     navegadores modernos.
+   viewer.css — Contraplano Flipbook
 ============================================================ */
 
-/* ── Contenedor principal ──────────────────────────────────── */
+/* ── Contenedor principal ──── */
 .flipbook-contenedor {
     position: relative;
-    background: #1a1a1a;
-    border-radius: 8px;
+    background: transparent !important;
+    border-radius: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 15px 50px rgba(0, 0, 0, 0.5);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    margin-bottom: 20px;
-    /* Asegurar que el contenedor respete la altura dada por el shortcode */
+    box-shadow: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    width: 100% !important;
     box-sizing: border-box;
+    min-height: 80vh !important;
 }
 
-/* ── Barra de navegación ───────────────────────────────────── */
-.flipbook-barra {
-    flex-shrink: 0;           /* La barra NUNCA se comprime */
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-    background: #1e293b;
-    padding: 8px 16px;
-    color: #fff;
-    font-size: 14px;
-    z-index: 30;
-    box-sizing: border-box;
-}
-
-.barra-grupo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-/* ── Botones ───────────────────────────────────────────────── */
-.flipbook-btn {
-    background: rgba(255, 255, 255, .15);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, .2);
-    border-radius: 5px;
-    padding: 5px 14px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: background .15s;
-    white-space: nowrap;
-    line-height: 1.4;
-}
-
-.flipbook-btn:hover {
-    background: rgba(255, 255, 255, .28);
-}
-
-.flipbook-btn .dashicons {
-    font-size: 18px;
-    width: 18px;
-    height: 18px;
-    line-height: 1;
-    vertical-align: middle;
-}
-
-/* ── Info de página ────────────────────────────────────────── */
-.flipbook-info-pagina {
-    font-size: 13px;
-    color: #cbd5e1;
-    user-select: none;
-}
-
-.flipbook-pagina-actual {
-    color: #1cbfb8;
-    font-weight: bold;
-}
-
-/* ── Área del canvas ───────────────────────────────────────── */
+/* ── Área del libro ────────────────────────────────────────── */
 .flipbook-canvas-wrapper {
-    /* flex:1 + min-height:0 es el patrón correcto para que un
-       hijo flex llene el espacio restante sin desbordarse */
-    flex: 1 1 0;
-    min-height: 0;
+    flex: 1;
+    width: 100%;
+    height: 100%;
     min-width: 0;
-    position: relative;          /* ancla los overlays */
+    position: relative;
     display: flex;
     justify-content: center;
     align-items: center;
-    padding: 40px 20px;
-    overflow: hidden;
-    background: radial-gradient(circle, #2c2c2c 0%, #1a1a1a 100%);
+    padding: 0 60px;
+    overflow: visible;
+    background: transparent !important;
     box-sizing: border-box;
+    transition: transform .25s ease;
+    transform-origin: top center;
 }
 
-/* ── Canvas del PDF ────────────────────────────────────────── */
-.flipbook-canvas {
-    display: block;
-    max-width: 100%;
-    max-height: 100%;
-    /* El tamaño real lo fija JS (canvas.width / canvas.height).
-       height:auto !important causaba que el canvas se
-       distorsionara cuando el wrapper era más alto que el PDF. */
-    box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);
-    background-color: #fff;
+/* ── FLECHAS LATERALES ─────────────────────────────────────── */
+.fb-flecha {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s, opacity .15s, left 0.1s, right 0.1s;
+    opacity: 0.8;
+    padding: 0;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.fb-flecha:hover {
+    background: rgba(0, 0, 0, 0.8);
+    opacity: 1;
+}
+
+.fb-flecha-izq {
+    left: 15px;
+}
+
+.fb-flecha-der {
+    right: 15px;
+}
+
+/* ── BOTÓN FULLSCREEN ──────────────────────────────────────── */
+.fb-btn-fs-flotante {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: opacity .2s, background .15s;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    opacity: 0.8;
+    pointer-events: auto;
+    white-space: nowrap;
+}
+
+.fb-btn-fs-flotante:hover {
+    background: #000;
+    opacity: 1;
+}
+
+.fb-btn-fs-flotante svg {
+    flex-shrink: 0;
 }
 
 /* ── Capa de overlays ──────────────────────────────────────── */
 .flipbook-overlays {
-    /* JS calcula left/top/width/height exactos sobre el canvas */
     position: absolute;
     pointer-events: none;
-    /* No cambiar overflow aquí — los iframes de YouTube necesitan
-       poder salir de los bounds del overlay si el usuario los amplía */
+    overflow: visible !important;
+    z-index: 100 !important;
 }
 
-/* Activar clics solo para los elementos multimedia */
-.flipbook-overlays > * {
+.flipbook-overlays>* {
     pointer-events: auto;
 }
 
-/* Evitar que max-width del tema rompa iframes e imágenes */
+.flipbook-overlay,
+.fb-ov {
+    overflow: visible !important;
+}
+
 .flipbook-overlays img,
 .flipbook-overlays iframe,
 .flipbook-overlays svg {
@@ -142,64 +137,126 @@
     display: block;
 }
 
-/* ── Animación de cambio de página ─────────────────────────── */
-@keyframes flipbookPageTurnNext {
-    0%   { transform: perspective(1200px) rotateY(0deg);    opacity: 1; }
-    35%  { transform: perspective(1200px) rotateY(-10deg);  opacity: .9; }
-    100% { transform: perspective(1200px) rotateY(0deg);    opacity: 1; }
+/* ── Barra inferior (Oculta) ───────────────────────────────── */
+.flipbook-barra,
+.barra-grupo,
+.flipbook-btn,
+.flipbook-info-pagina,
+.flipbook-pagina-actual {
+    display: none;
 }
 
-@keyframes flipbookPageTurnPrev {
-    0%   { transform: perspective(1200px) rotateY(0deg);   opacity: 1; }
-    35%  { transform: perspective(1200px) rotateY(10deg);  opacity: .9; }
-    100% { transform: perspective(1200px) rotateY(0deg);   opacity: 1; }
-}
-
-.flipbook-canvas-wrapper.flipbook-turn-next .flipbook-canvas {
-    animation: flipbookPageTurnNext .4s cubic-bezier(.2, .7, .2, 1);
-}
-
-.flipbook-canvas-wrapper.flipbook-turn-prev .flipbook-canvas {
-    animation: flipbookPageTurnPrev .4s cubic-bezier(.2, .7, .2, 1);
-}
-
-/* ── Pantalla completa ─────────────────────────────────────── */
-.flipbook-contenedor:fullscreen {
-    width: 100vw  !important;
-    height: 100vh !important;
-    border-radius: 0;
-    margin: 0;
-}
-
-/* Prefijo -webkit- para Safari */
+/* ── Pantalla completa (Fondo Negro garantizado) ───────────── */
+.flipbook-contenedor:fullscreen,
 .flipbook-contenedor:-webkit-full-screen {
-    width: 100vw  !important;
+    width: 100vw !important;
     height: 100vh !important;
+    background: #000 !important;
     border-radius: 0;
     margin: 0;
 }
 
 .flipbook-contenedor:fullscreen .flipbook-canvas-wrapper {
-    padding: 50px 30px;
+    background: #000 !important;
+    padding: 20px 60px;
+    overflow: hidden;
 }
 
-/* ── Responsive ────────────────────────────────────────────── */
-@media (max-width: 600px) {
-    .flipbook-barra {
-        padding: 8px 10px;
-        gap: 8px;
-    }
+.flipbook-contenedor:fullscreen::backdrop {
+    background: #000 !important;
+}
 
-    .barra-grupo {
-        gap: 8px;
-    }
+/* ── StPageFlip: Fondos transparentes ──────────────────────── */
+[id^="flip-target"],
+.stf__parent,
+.stf__block {
+    background: transparent !important;
+}
 
-    .flipbook-btn {
-        padding: 5px 10px;
-        font-size: 12px;
+.stf__parent>canvas {
+    opacity: 1 !important;
+}
+
+/* ── Portadas solas centradas (Recorte SÓLO al canvas) ─────── */
+.flipbook-contenedor.en-portada .stf__parent {
+    clip-path: inset(0 0 0 50%) !important;
+    transform: translateX(-25%);
+}
+
+.flipbook-contenedor.en-contraportada .stf__parent {
+    clip-path: inset(0 50% 0 0) !important;
+    transform: translateX(25%);
+}
+
+/* ── Móvil ─────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .flipbook-contenedor {
+        min-height: 85vh !important;
+        /* Asegura área suficiente */
+        height: auto !important;
+        overflow: hidden !important;
+        background-color: #1a1a1a !important;
+        /* Fondo oscuro opcional tipo Paperturn */
     }
 
     .flipbook-canvas-wrapper {
-        padding: 12px 8px;
+        flex: 1;
+        /* Permite que el wrapper use el espacio restante */
+        width: 100%;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        /* ESTO CENTRA EL LIBRO VERTICALMENTE */
+        overflow: visible !important;
+        position: relative;
+    }
+
+    /* El JS pone dimensiones fijas al target */
+    [id^="flip-target"] {
+        flex: none;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        /* Le da profundidad estilo Paperturn */
+    }
+
+    /* Permitir touch sin que el browser bloquee gestos */
+    .stf__parent {
+        touch-action: pan-y !important;
+    }
+
+    /* Portrait mode = 1 página → sin clip-path de portada */
+    .flipbook-contenedor.en-portada .stf__parent,
+    .flipbook-contenedor.en-contraportada .stf__parent {
+        clip-path: none !important;
+        transform: none !important;
+    }
+
+    .fb-flecha {
+        width: 36px;
+        height: 36px;
+        font-size: 24px;
+        background: rgba(255, 255, 255, 0.9);
+        /* Flechas más claras y visibles */
+        color: #000;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Ajustamos las flechas a los bordes */
+    .fb-flecha-izq {
+        left: 8px;
+    }
+
+    .fb-flecha-der {
+        right: 8px;
+    }
+
+    .fb-btn-fs-flotante {
+        top: 15px;
+        /* Lo bajamos un poco para que no choque con el header de iPhone */
+        font-size: 12px;
+        padding: 6px 10px;
+        background: rgba(255, 255, 255, 0.85);
+        color: #000;
+        border-radius: 20px;
     }
 }

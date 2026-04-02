@@ -2,7 +2,7 @@
 /*
 Plugin Name: Contraplano Flipbook
 Description: Editor interactivo de PDF tipo flipbook con soporte para video YouTube, audio, imágenes y presentaciones tipo slider. Comprime el PDF al cargarlo.
-Version: 4.4
+Version: 4.4.1
 Author: Diego Montecinos y Maverick Valdes
 */
 
@@ -10,7 +10,7 @@ Author: Diego Montecinos y Maverick Valdes
 if (! defined('ABSPATH')) exit;
 
 // Constantes globales del plugin
-define('FLIPBOOK_VERSION',    '1.0.6');
+define('FLIPBOOK_VERSION',    '1.2.2');
 define('FLIPBOOK_DIR',        plugin_dir_path(__FILE__));
 define('FLIPBOOK_URL',        plugin_dir_url(__FILE__));
 
