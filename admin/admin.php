@@ -962,9 +962,18 @@ body { display: flex; flex-direction: column; }
             inpPag.value = pagActual;
             actualizarBotones();
 
-            // Evitar que queden audios reproduciéndose al cambiar de página.
+            // Pausar audios anteriores y reproducir los de la página actual
             pausarAudiosDelLibro();
         });
+
+        pageFlip.on('changeState', function(e) {
+            if (e.data === 'read') {
+                reproducirAutoplaySecuencial();
+            }
+        });
+
+        // Autoplay en portada al cargar
+        setTimeout(function() { reproducirAutoplaySecuencial(); }, 600);
 
         pageFlip.on('changeOrientation', function() {
             irA(pagActual);
@@ -1011,8 +1020,36 @@ body { display: flex; flex-direction: column; }
 
     function pausarAudiosDelLibro() {
         flipContainer.querySelectorAll('audio').forEach(a => {
-            try { a.pause(); } catch(_) {}
+            try { a.pause(); a.currentTime = 0; } catch(_) {}
         });
+    }
+
+    function reproducirAutoplaySecuencial() {
+        if (!pageFlip) return;
+        var idx = pageFlip.getCurrentPageIndex();
+        var allPages = flipContainer.querySelectorAll('.page-item');
+        // En portada (idx=0, showCover:true) solo se ve la portada, no el spread
+        var visibles = (idx === 0) ? [0] : [idx, idx + 1];
+
+        var audios = [];
+        visibles.forEach(function(pi) {
+            if (pi < 0 || pi >= allPages.length) return;
+            allPages[pi].querySelectorAll('audio[data-autoplay="1"]').forEach(function(a) {
+                audios.push(a);
+            });
+        });
+        if (!audios.length) return;
+
+        var i = 0;
+        function playNext() {
+            if (i >= audios.length) return;
+            var a = audios[i];
+            a.currentTime = 0;
+            a.play().then(function() {
+                a.addEventListener('ended', function() { i++; playNext(); }, { once: true });
+            }).catch(function() { i++; playNext(); });
+        }
+        playNext();
     }
 
     /* ── Overlays builders ── */
@@ -1059,9 +1096,12 @@ body { display: flex; flex-direction: column; }
         const bgActive = 'rgba(0,0,0,.25)';
         const borderIdle = 'rgba(255,255,255,.45)';
         const borderActive = 'rgba(255,255,255,.95)';
-        const playPath = 'M8 5v14l11-7z';
-        const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
+        // Ícono parlante (speaker) — igual que viewer.js
+        const playPath = 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8.5v7a4.47 4.47 0 002.5-3.5zM14 3.23v2.06a7.007 7.007 0 010 13.42v2.06A9.013 9.013 0 0023 12 9.013 9.013 0 0014 3.23z';
+        const pausePath = 'M16.5 12A4.5 4.5 0 0014 8.5v7a4.47 4.47 0 002.5-3.5zM3 9v6h4l5 5V4L7 9H3z';
 
+        // z-index alto para que quede por encima de otros overlays (sliders, etc.)
+        wrap.style.zIndex = '50';
         wrap.style.display='flex';
         wrap.style.alignItems='center';
         wrap.style.justifyContent='center';
@@ -1073,7 +1113,7 @@ body { display: flex; flex-direction: column; }
         const audio=document.createElement('audio');
         audio.src=d.url||'';
         audio.preload='auto';
-        if(d.autoplay)audio.autoplay=true;
+        if(d.autoplay)audio.dataset.autoplay='1';
 
         const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
         svg.setAttribute('viewBox','0 0 24 24');
@@ -1083,7 +1123,7 @@ body { display: flex; flex-direction: column; }
         svg.style.pointerEvents = 'none';
         svg.innerHTML='<path d="' + playPath + '"/>';
 
-        let playing=!!d.autoplay;
+        let playing=false;
         wrap.appendChild(audio);
         wrap.appendChild(svg);
         if (playing) {
