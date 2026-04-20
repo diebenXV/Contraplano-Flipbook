@@ -113,11 +113,32 @@ class Flipbook_Admin {
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',[], '3.11.174', true
         );
 
+        // lamejs — encoder MP3 en JS para comprimir audios en el cliente
+        // antes de subirlos al servidor. ~156KB minificado, MIT license.
+        wp_enqueue_script(
+            'flipbook-lamejs',
+            FLIPBOOK_URL . 'assets/vendor/lame.min.js',
+            [],
+            '1.2.1',
+            true
+        );
+
+        // compresion.js — helpers cliente-side para imagen (Canvas) y audio (lamejs).
+        // Debe cargarse ANTES que editor.js para que window.ContraplanoCompresion esté
+        // disponible cuando se llame desde confirmarImagen/confirmarAudio/confirmarPresentacion.
+        wp_enqueue_script(
+            'flipbook-compresion',
+            FLIPBOOK_URL . 'assets/js/compresion.js',
+            [ 'flipbook-lamejs' ],
+            FLIPBOOK_VERSION,
+            true
+        );
+
         // Script principal del editor visual
         wp_enqueue_script(
             'flipbook-editor',
             FLIPBOOK_URL . 'assets/js/editor.js',
-            [ 'jquery', 'pdfjs' ],
+            [ 'jquery', 'pdfjs', 'flipbook-compresion' ],
             FLIPBOOK_VERSION,
             true
         );
@@ -142,6 +163,19 @@ class Flipbook_Admin {
             $titulo      = $post ? $post->post_title : '';
         }
 
+        // Páginas insertadas y orden de páginas
+        $editor_inserted = [];
+        $editor_hidden = [];
+        $editor_page_order = [];
+        if ( $flipbook_id ) {
+            $ins = get_post_meta( $flipbook_id, '_flipbook_inserted_pages', true );
+            if ( is_array( $ins ) ) $editor_inserted = $ins;
+            $hid = get_post_meta( $flipbook_id, '_flipbook_hidden_pages', true );
+            if ( is_array( $hid ) ) $editor_hidden = array_map( 'intval', $hid );
+            $po = get_post_meta( $flipbook_id, '_flipbook_page_order', true );
+            if ( is_array( $po ) ) $editor_page_order = $po;
+        }
+
         // URL de la vista previa para pasarla al JS del editor
         $preview_url = $flipbook_id
             ? admin_url( 'admin.php?page=flipbook-preview&flipbook_id=' . $flipbook_id )
@@ -149,14 +183,17 @@ class Flipbook_Admin {
 
         // Pasar configuración inicial al JavaScript del editor
         wp_localize_script( 'flipbook-editor', 'contraplanoFlipbookAdmin',[
-            'ajax_url'    => admin_url( 'admin-ajax.php' ),
-            'nonce'       => wp_create_nonce( 'flipbook_nonce' ),
-            'plugin_url'  => FLIPBOOK_URL,
-            'flipbook_id' => $flipbook_id,
-            'pdf_url'     => $pdf_url,
-            'pdf_paginas' => intval( $pdf_paginas ),
-            'titulo'      => $titulo,
-            'preview_url' => $preview_url,
+            'ajax_url'        => admin_url( 'admin-ajax.php' ),
+            'nonce'           => wp_create_nonce( 'flipbook_nonce' ),
+            'plugin_url'      => FLIPBOOK_URL,
+            'flipbook_id'     => $flipbook_id,
+            'pdf_url'         => $pdf_url,
+            'pdf_paginas'     => intval( $pdf_paginas ),
+            'titulo'          => $titulo,
+            'preview_url'     => $preview_url,
+            'inserted_pages'  => $editor_inserted,
+            'hidden_pages'    => $editor_hidden,
+            'page_order'      => $editor_page_order,
         ]);
     }
 
@@ -271,7 +308,7 @@ class Flipbook_Admin {
                                 <button class="fb-btn fb-btn-audio"
                                         data-id="<?php echo $flip->ID; ?>"
                                         data-accion="borrar-audio"
-                                        title="Elimina solo los archivos de audio (.mp3, .wav, .ogg) de este flipbook de manera permanente">
+                                        title="Elimina solo los archivos de audio (.mp3, .wav, .ogg, .m4a) de este flipbook de manera permanente">
                                     🔇 Borrar audio
                                 </button>
 
@@ -307,7 +344,7 @@ class Flipbook_Admin {
                     // Confirmación antes de borrar los audios
                     if ( ! confirm(
                         '¿Eliminar TODOS los archivos de audio de este flipbook?\n\n' +
-                        'Esta acción borra los archivos .mp3/.wav/.ogg del servidor de manera permanente.\n' +
+                        'Esta acción borra los archivos .mp3/.wav/.ogg/.m4a del servidor de manera permanente.\n' +
                         'Los demás elementos (video, imágenes, presentación) se conservan.'
                     ) ) return;
 
@@ -461,13 +498,24 @@ class Flipbook_Admin {
         if ( ! $config_numeros || ! is_array( $config_numeros ) ) {
             $config_numeros = [
                 'colorNumero'   => '#666666',
-                'colorFondo'    => '#FFFFFF',
-                'opacidadFondo' => 0.8,
-                'posicion'      => 'inferior-derecha',
+                'colorFondo'    => '#00FFFF',
+                'opacidadFondo' => 1,
+                'mostrarFondo'  => true,
+                'posicion'      => 'inferior-centro',
                 'tamanio'       => 14,
                 'mostrar'       => true,
             ];
         }
+
+        // Páginas insertadas y orden de páginas
+        $inserted_pages = get_post_meta( $flipbook_id, '_flipbook_inserted_pages', true );
+        if ( ! is_array( $inserted_pages ) ) $inserted_pages = [];
+
+        $hidden_pages = get_post_meta( $flipbook_id, '_flipbook_hidden_pages', true );
+        if ( ! is_array( $hidden_pages ) ) $hidden_pages = [];
+
+        $page_order = get_post_meta( $flipbook_id, '_flipbook_page_order', true );
+        if ( ! is_array( $page_order ) ) $page_order = [];
 
         $editor_url = admin_url( 'admin.php?page=flipbook-editor&flipbook_id=' . $flipbook_id );
 
@@ -824,6 +872,9 @@ body { display: flex; flex-direction: column; }
     const PDF_URL    = <?php echo json_encode( $pdf_url   ); ?>;
     const OVERLAYS   = <?php echo wp_json_encode( array_values( $overlays ) ); ?>;
     const CONFIG_NUM = <?php echo wp_json_encode( $config_numeros ?? [] ); ?>;
+    const INSERTED_PAGES = <?php echo wp_json_encode( $inserted_pages ); ?>;
+    const HIDDEN_PAGES = <?php echo wp_json_encode( array_map( 'intval', $hidden_pages ?? [] ) ); ?>;
+    const PAGE_ORDER = <?php echo wp_json_encode( $page_order ); ?>;
 
     let totalPags  = <?php echo intval( $paginas ); ?>;
     let pdfDoc     = null;
@@ -879,45 +930,75 @@ body { display: flex; flex-direction: column; }
         return Math.min(porAncho, porAlto, 2.5);
     }
 
-    /* ── Renderizar todas las páginas del PDF como canvases ── */
+    /* ── Renderizar todas las páginas (PDF + insertadas) como canvases ── */
     async function renderizarTodasLasPaginas() {
         const esc = await calcularEscalaBase();
 
-        // Renderizar la primera página para saber las dimensiones
         const pag1   = await pdfDoc.getPage(1);
         const vp1    = pag1.getViewport({ scale: esc });
         const W      = Math.round(vp1.width);
         const H      = Math.round(vp1.height);
 
-        // Limpiar el contenedor del flipbook
+        // Construir pageMap
+        var pageMap = [];
+        if (PAGE_ORDER && PAGE_ORDER.length > 0) {
+            pageMap = PAGE_ORDER.slice();
+        } else {
+            var hiddenSet = HIDDEN_PAGES || [];
+            for (var pi = 1; pi <= pdfDoc.numPages; pi++) {
+                if (hiddenSet.indexOf(pi) === -1) {
+                    pageMap.push({ type: 'pdf', num: pi });
+                }
+            }
+            var inserts = (INSERTED_PAGES || []).slice().sort(function (a, b) {
+                return b.pagina_flipbook - a.pagina_flipbook;
+            });
+            inserts.forEach(function (ins) {
+                var idx = ins.pagina_flipbook - 1;
+                if (idx < 0) idx = 0;
+                if (idx > pageMap.length) idx = pageMap.length;
+                if (ins.posicion === 'despues') idx++;
+                pageMap.splice(idx, 0, { type: 'inserted', url: ins.url });
+            });
+        }
+
+        totalPags = pageMap.length;
+        lblTotal.textContent = '/ ' + totalPags;
+
         flipContainer.innerHTML = '';
 
-        for (let i = 1; i <= totalPags; i++) {
-            const pag = await pdfDoc.getPage(i);
-            const vp  = pag.getViewport({ scale: esc });
+        for (let i = 0; i < totalPags; i++) {
+            var entry = pageMap[i];
+            var pageNum = i + 1;
 
-            const cv = document.createElement('canvas');
-            cv.width  = W;
-            cv.height = H;
-            cv.style.cssText = `display:block;width:${W}px;height:${H}px;`;
-
-            await pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-
-            // Dibujar número de página si está configurado
-            if (CONFIG_NUM && CONFIG_NUM.mostrar !== false) {
-                dibujarNumPag(cv, i, totalPags, CONFIG_NUM);
-            }
-
-            // Cada página es un div que StPageFlip va a usar
             const pageDiv = document.createElement('div');
             pageDiv.className = 'page-item';
-            pageDiv.dataset.page = i;
+            pageDiv.dataset.page = pageNum;
             pageDiv.style.cssText = `width:${W}px;height:${H}px;overflow:hidden;position:relative;`;
-            pageDiv.appendChild(cv);
-            inyectarOverlaysEnPagina(pageDiv, i, W, H);
-            flipContainer.appendChild(pageDiv);
 
-            paginas[i] = { div: pageDiv, canvas: cv, W, H };
+            if (entry.type === 'pdf') {
+                const pag = await pdfDoc.getPage(entry.num);
+                const vp  = pag.getViewport({ scale: esc });
+                const cv = document.createElement('canvas');
+                cv.width  = W;
+                cv.height = H;
+                cv.style.cssText = `display:block;width:${W}px;height:${H}px;`;
+                await pag.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+                if (CONFIG_NUM && CONFIG_NUM.mostrar !== false) {
+                    dibujarNumPag(cv, pageNum, totalPags, CONFIG_NUM);
+                }
+                pageDiv.appendChild(cv);
+            } else {
+                // Página insertada: mostrar como imagen
+                const img = document.createElement('img');
+                img.src = entry.url;
+                img.style.cssText = `display:block;width:${W}px;height:${H}px;object-fit:contain;background:#fff;`;
+                pageDiv.appendChild(img);
+            }
+
+            inyectarOverlaysEnPagina(pageDiv, pageNum, W, H);
+            flipContainer.appendChild(pageDiv);
+            paginas[pageNum] = { div: pageDiv, W, H };
         }
 
         return { W, H };
@@ -1183,15 +1264,18 @@ body { display: flex; flex-direction: column; }
     /* ── Número de página sobre canvas ── */
     function dibujarNumPag(canvas, pag, total, cfg) {
         if(!cfg||!cfg.mostrar) return;
-        const ctx=canvas.getContext('2d'),pad=15,fs=Math.max(cfg.tamanio||14,canvas.width*0.015),txt=pag+' / '+total;
+        var pp=cfg.porPagina?cfg.porPagina[pag]:null;
+        if(pp) cfg=Object.assign({},cfg,pp);
+        const ctx=canvas.getContext('2d'),pad=5,fs=(cfg.tamanio||14)*(canvas.width/536),txt=''+pag;
         ctx.font='bold '+fs+'px Arial,sans-serif'; ctx.textBaseline='bottom';
-        const pos=cfg.posicion||'inferior-derecha'; let x,y;
+        const pos=cfg.posicion||'inferior-centro'; let x,y;
         if(pos==='inferior-derecha'){ctx.textAlign='right';x=canvas.width-pad;y=canvas.height-pad;}
         else if(pos==='inferior-izquierda'){ctx.textAlign='left';x=pad;y=canvas.height-pad;}
         else if(pos==='inferior-centro'){ctx.textAlign='center';x=canvas.width/2;y=canvas.height-pad;}
         else if(pos==='superior-derecha'){ctx.textAlign='right';x=canvas.width-pad;y=pad+fs;}
         else if(pos==='superior-izquierda'){ctx.textAlign='left';x=pad;y=pad+fs;}
         else if(pos==='superior-centro'){ctx.textAlign='center';x=canvas.width/2;y=pad+fs;}
+        else if(pos==='personalizada'){ctx.textAlign='center';x=(cfg.customX||50)/100*canvas.width;y=(cfg.customY||95)/100*canvas.height;}
         else{ctx.textAlign='center';x=canvas.width/2;y=canvas.height/2+fs/2;}
         const mw=ctx.measureText(txt).width,mh=fs+4;
         let bx,by;
@@ -1201,10 +1285,14 @@ body { display: flex; flex-direction: column; }
         else if(pos==='superior-derecha'){bx=canvas.width-mw-pad-4;by=pad-4;}
         else if(pos==='superior-izquierda'){bx=pad-4;by=pad-4;}
         else if(pos==='superior-centro'){bx=canvas.width/2-mw/2-4;by=pad-4;}
+        else if(pos==='personalizada'){bx=x-mw/2-4;by=y-mh;}
         else{bx=canvas.width/2-mw/2-4;by=canvas.height/2-mh/2;}
-        const rgb=hexRgb(cfg.colorFondo||'#FFFFFF');
-        ctx.fillStyle='rgba('+rgb.r+','+rgb.g+','+rgb.b+','+(cfg.opacidadFondo||0.8)+')';
-        ctx.fillRect(bx,by,mw+8,mh+4); ctx.fillStyle=cfg.colorNumero||'#666666'; ctx.fillText(txt,x,y);
+        if(cfg.mostrarFondo!==false){
+            const rgb=hexRgb(cfg.colorFondo||'#00FFFF');
+            ctx.fillStyle='rgba('+rgb.r+','+rgb.g+','+rgb.b+','+(cfg.opacidadFondo!=null?cfg.opacidadFondo:1)+')';
+            ctx.fillRect(bx,by,mw+8,mh+4);
+        }
+        ctx.fillStyle=cfg.colorNumero||'#666666'; ctx.fillText(txt,x,y);
     }
     function hexRgb(h){const r=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);return r?{r:parseInt(r[1],16),g:parseInt(r[2],16),b:parseInt(r[3],16)}:{r:102,g:102,b:102};}
 

@@ -16,7 +16,7 @@
     padding: 0 !important;
     width: 100% !important;
     box-sizing: border-box;
-    min-height: 80vh !important;
+    min-height: 90vh !important;
 }
 
 /* ── Área del libro ────────────────────────────────────────── */
@@ -42,7 +42,7 @@
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    z-index: 40;
+    z-index: 1000;
     background: rgba(0, 0, 0, 0.4);
     color: #fff;
     border: none;
@@ -55,11 +55,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background .15s, opacity .15s, left 0.1s, right 0.1s;
+    transition: background .15s, opacity .15s;
     opacity: 0.8;
     padding: 0;
     user-select: none;
     flex-shrink: 0;
+    pointer-events: auto;
 }
 
 .fb-flecha:hover {
@@ -126,6 +127,42 @@
     overflow: visible !important;
 }
 
+/* Wraps de audio: overflow hidden para que el elemento audio no se desborde */
+.fb-ov:has(audio) {
+    overflow: hidden !important;
+}
+
+/* Audio siempre oculto — tanto en overlays como en el contenedor off-screen (sink) */
+.fb-ov audio,
+.fb-ov-layer audio,
+[id^="fb-audio-sink"] audio {
+    display: none !important;
+    position: absolute !important;
+    width: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
+/* Ocultar controles nativos del navegador si aparecen */
+.fb-ov audio::-webkit-media-controls,
+.fb-ov-layer audio::-webkit-media-controls,
+[id^="fb-audio-sink"] audio::-webkit-media-controls,
+.fb-ov audio::-webkit-media-controls-panel,
+.fb-ov-layer audio::-webkit-media-controls-panel,
+[id^="fb-audio-sink"] audio::-webkit-media-controls-panel,
+.fb-ov audio::-webkit-media-controls-enclosure,
+.fb-ov-layer audio::-webkit-media-controls-enclosure,
+[id^="fb-audio-sink"] audio::-webkit-media-controls-enclosure {
+    display: none !important;
+    -webkit-appearance: none !important;
+    width: 0 !important;
+    height: 0 !important;
+}
+
 .flipbook-overlays img,
 .flipbook-overlays iframe,
 .flipbook-overlays svg {
@@ -147,6 +184,19 @@
 }
 
 /* ── Pantalla completa (Fondo Negro garantizado) ───────────── */
+/* Evitar selección de texto en todo el flipbook */
+.flipbook-contenedor,
+.flipbook-canvas-wrapper,
+.stf__parent,
+.stf__block,
+.stf__item,
+[id^="flip-target"] {
+    -webkit-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+    user-select: none !important;
+}
+
 .flipbook-contenedor:fullscreen,
 .flipbook-contenedor:-webkit-full-screen {
     width: 100vw !important;
@@ -154,12 +204,32 @@
     background: #000 !important;
     border-radius: 0;
     margin: 0;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
 }
 
 .flipbook-contenedor:fullscreen .flipbook-canvas-wrapper {
     background: #000 !important;
-    padding: 20px 60px;
-    overflow: hidden;
+    padding: 0;
+    overflow: visible;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.flipbook-contenedor:fullscreen .stf__parent {
+    max-width: 95vw !important;
+    max-height: 90vh !important;
+}
+
+.flipbook-contenedor:fullscreen .fb-flecha {
+    z-index: 99999 !important;
+    pointer-events: auto !important;
+    display: flex !important;
 }
 
 .flipbook-contenedor:fullscreen::backdrop {
@@ -171,6 +241,14 @@
 .stf__parent,
 .stf__block {
     background: transparent !important;
+}
+
+/* Forzar cursor personalizado sobre StPageFlip (que setea cursor inline) */
+.stf__parent,
+.stf__parent .stf__block,
+.stf__parent .stf__item,
+[id^="flip-target"] {
+    cursor: var(--fb-cursor, zoom-in) !important;
 }
 
 .stf__parent>canvas {
@@ -221,7 +299,7 @@
 
     /* Permitir touch sin que el browser bloquee gestos */
     .stf__parent {
-        touch-action: pan-y !important;
+        touch-action: none !important;
     }
 
     /* Portrait mode = 1 página → sin clip-path de portada */
@@ -251,12 +329,113 @@
     }
 
     .fb-btn-fs-flotante {
-        top: 15px;
-        /* Lo bajamos un poco para que no choque con el header de iPhone */
-        font-size: 12px;
-        padding: 6px 10px;
-        background: rgba(255, 255, 255, 0.85);
-        color: #000;
-        border-radius: 20px;
+        display: none; /* En móvil usamos el navbar inferior */
     }
+}
+
+/* ── Navbar de navegación móvil (solo móvil) ─────────────── */
+.fb-navbar-movil {
+    display: none; /* Oculto en desktop */
+}
+
+@media (max-width: 768px) {
+    .fb-navbar-movil {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 40px;
+        padding: 12px 0;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+        background: rgba(28, 52, 63, 0.92);
+        -webkit-backdrop-filter: blur(16px);
+        backdrop-filter: blur(16px);
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        position: relative;
+        z-index: 50;
+        flex-shrink: 0;
+    }
+
+    .fb-nav-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 48px;
+        height: 48px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.85);
+        cursor: pointer;
+        transition: background .15s, transform .1s;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .fb-nav-btn:active {
+        background: rgba(255, 255, 255, 0.22);
+        transform: scale(0.92);
+    }
+
+    .fb-nav-btn.fb-nav-fs {
+        width: 44px;
+        height: 44px;
+        background: rgba(255, 255, 255, 0.14);
+    }
+
+    /* En fullscreen, navbar se queda abajo */
+    .flipbook-contenedor:fullscreen .fb-navbar-movil,
+    .flipbook-contenedor:-webkit-full-screen .fb-navbar-movil {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 12px 0;
+        padding-bottom: env(safe-area-inset-bottom, 12px);
+    }
+}
+
+/* ── Loader de preparación del flipbook ─────────────────────
+   Se muestra mientras se descargan los audios iniciales.
+   Aparece centrado sobre el contenedor hasta que el flipbook está listo. */
+.fb-loader {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 99999;
+    background: rgba(255, 255, 255, 0.98);
+    pointer-events: auto;
+    transition: opacity .35s ease;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.fb-loader-oculto {
+    opacity: 0;
+    pointer-events: none;
+}
+.fb-loader-spinner {
+    width: 44px;
+    height: 44px;
+    border: 3px solid rgba(199, 0, 0, 0.15);
+    border-top-color: #C70000;
+    border-radius: 50%;
+    animation: fb-spin 0.9s linear infinite;
+}
+.fb-loader-titulo {
+    font-size: 15px;
+    font-weight: 500;
+    color: #333;
+    margin: 0;
+    letter-spacing: 0.2px;
+}
+.fb-loader-progreso {
+    font-size: 13px;
+    color: #888;
+    margin: 0;
+    min-height: 1em;
+    font-variant-numeric: tabular-nums;
+}
+@keyframes fb-spin {
+    to { transform: rotate(360deg); }
 }

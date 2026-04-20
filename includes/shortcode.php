@@ -151,13 +151,26 @@ class Flipbook_Shortcode
         if (! $config_numeros || ! is_array($config_numeros)) {
             $config_numeros = [
                 'colorNumero'   => '#666666',
-                'colorFondo'    => '#FFFFFF',
-                'opacidadFondo' => 0.8,
-                'posicion'      => 'inferior-derecha',
+                'colorFondo'    => '#00FFFF',
+                'opacidadFondo' => 1,
+                'mostrarFondo'  => true,
+                'posicion'      => 'inferior-centro',
                 'tamanio'       => 14,
                 'mostrar'       => true,
             ];
         }
+
+        // Obtener páginas insertadas
+        $inserted_pages = get_post_meta($flipbook_id, '_flipbook_inserted_pages', true);
+        if (! is_array($inserted_pages)) $inserted_pages = [];
+
+        // Obtener páginas ocultas
+        $hidden_pages = get_post_meta($flipbook_id, '_flipbook_hidden_pages', true);
+        if (! is_array($hidden_pages)) $hidden_pages = [];
+
+        // Obtener orden de páginas
+        $page_order = get_post_meta($flipbook_id, '_flipbook_page_order', true);
+        if (! is_array($page_order)) $page_order = [];
 
         // Pasar los datos al JavaScript
         $datos_js = [
@@ -166,6 +179,9 @@ class Flipbook_Shortcode
             'overlays'       => $overlays,
             'flipbook_id'    => $flipbook_id,
             'config_numeros' => $config_numeros,
+            'inserted_pages' => $inserted_pages,
+            'hidden_pages'   => array_map('intval', $hidden_pages),
+            'page_order'     => $page_order,
         ];
 
         wp_localize_script('flipbook-viewer', 'flipbookData_' . $flipbook_id, $datos_js);

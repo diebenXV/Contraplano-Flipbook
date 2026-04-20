@@ -2,7 +2,7 @@
 /*
 Plugin Name: Contraplano Flipbook
 Description: Editor interactivo de PDF tipo flipbook con soporte para video YouTube, audio, imágenes y presentaciones tipo slider. Comprime el PDF al cargarlo.
-Version: 4.4.1
+Version: 5.7.8
 Author: Diego Montecinos y Maverick Valdes
 */
 
@@ -10,7 +10,7 @@ Author: Diego Montecinos y Maverick Valdes
 if (! defined('ABSPATH')) exit;
 
 // Constantes globales del plugin
-define('FLIPBOOK_VERSION',    '1.2.2');
+define('FLIPBOOK_VERSION',    '5.7.8');
 define('FLIPBOOK_DIR',        plugin_dir_path(__FILE__));
 define('FLIPBOOK_URL',        plugin_dir_url(__FILE__));
 
@@ -112,6 +112,17 @@ add_action('admin_init', function () {
 // Registrar el menú de administración
 add_action('admin_menu', ['Flipbook_Admin', 'agregar_menu']);
 
+// Cambiar el título de la pestaña del navegador para mostrar el nombre del flipbook
+add_filter('admin_title', function ($admin_title) {
+    if (isset($_GET['page']) && $_GET['page'] === 'flipbook-editor' && !empty($_GET['flipbook_id'])) {
+        $post = get_post(intval($_GET['flipbook_id']));
+        if ($post && $post->post_title) {
+            return $post->post_title . ' — Flipbook Editor';
+        }
+    }
+    return $admin_title;
+});
+
 // Encolar scripts y estilos en el panel de administración
 add_action('admin_enqueue_scripts', ['Flipbook_Admin', 'encolar_scripts']);
 
@@ -156,3 +167,6 @@ add_action('wp_ajax_flipbook_eliminar_audios',   ['Flipbook_Ajax', 'eliminar_aud
 add_action('wp_ajax_flipbook_guardar_titulo',         ['Flipbook_Ajax', 'guardar_titulo']);
 add_action('wp_ajax_flipbook_guardar_config_numeros', ['Flipbook_Ajax', 'guardar_config_numeros']);
 add_action('wp_ajax_flipbook_cargar_config_numeros',  ['Flipbook_Ajax', 'cargar_config_numeros']);
+add_action('wp_ajax_flipbook_insertar_pagina',        ['Flipbook_Ajax', 'insertar_pagina']);
+add_action('wp_ajax_flipbook_eliminar_pagina',        ['Flipbook_Ajax', 'eliminar_pagina']);
+add_action('wp_ajax_flipbook_mover_pagina',           ['Flipbook_Ajax', 'mover_pagina']);

@@ -37,18 +37,37 @@ class Flipbook_Ajax {
         // Sanitizar y validar cada campo de la configuración
         $posiciones_validas = [
             'inferior-derecha', 'inferior-izquierda', 'inferior-centro',
-            'superior-derecha', 'superior-izquierda', 'superior-centro', 'centro',
+            'superior-derecha', 'superior-izquierda', 'superior-centro',
+            'centro', 'personalizada',
         ];
 
         $config_limpia = [
             'colorNumero'   => sanitize_hex_color( $config['colorNumero']  ?? '#666666' ) ?: '#666666',
-            'colorFondo'    => sanitize_hex_color( $config['colorFondo']   ?? '#FFFFFF' ) ?: '#FFFFFF',
-            'opacidadFondo' => floatval( $config['opacidadFondo'] ?? 0.8 ),
-            'posicion'      => in_array( $config['posicion'] ?? 'inferior-derecha', $posiciones_validas )
-                                ? $config['posicion'] : 'inferior-derecha',
+            'colorFondo'    => sanitize_hex_color( $config['colorFondo']   ?? '#00FFFF' ) ?: '#00FFFF',
+            'opacidadFondo' => floatval( $config['opacidadFondo'] ?? 1 ),
+            'mostrarFondo'  => (bool) ( $config['mostrarFondo'] ?? true ),
+            'posicion'      => in_array( $config['posicion'] ?? 'inferior-centro', $posiciones_validas )
+                                ? $config['posicion'] : 'inferior-centro',
             'tamanio'       => intval( $config['tamanio'] ?? 14 ),
             'mostrar'       => (bool) ( $config['mostrar'] ?? true ),
+            'customX'       => floatval( $config['customX'] ?? 50 ),
+            'customY'       => floatval( $config['customY'] ?? 95 ),
         ];
+
+        // Guardar overrides por página si existen
+        if ( ! empty( $config['porPagina'] ) && is_array( $config['porPagina'] ) ) {
+            $porPagina = [];
+            foreach ( $config['porPagina'] as $pag => $pp ) {
+                if ( ! is_array( $pp ) ) continue;
+                $pagSanitizada = [];
+                if ( isset( $pp['colorNumero'] ) )   $pagSanitizada['colorNumero']   = sanitize_hex_color( $pp['colorNumero'] ) ?: '#666666';
+                if ( isset( $pp['colorFondo'] ) )     $pagSanitizada['colorFondo']    = sanitize_hex_color( $pp['colorFondo'] ) ?: '#00FFFF';
+                if ( isset( $pp['opacidadFondo'] ) )  $pagSanitizada['opacidadFondo'] = floatval( $pp['opacidadFondo'] );
+                if ( isset( $pp['mostrarFondo'] ) )   $pagSanitizada['mostrarFondo']  = (bool) $pp['mostrarFondo'];
+                if ( ! empty( $pagSanitizada ) ) $porPagina[ intval( $pag ) ] = $pagSanitizada;
+            }
+            if ( ! empty( $porPagina ) ) $config_limpia['porPagina'] = $porPagina;
+        }
 
         update_post_meta( $flipbook_id, '_flipbook_config_numeros', $config_limpia );
 
@@ -79,8 +98,9 @@ class Flipbook_Ajax {
         if ( ! $config || ! is_array( $config ) ) {
             $config = [
                 'colorNumero'   => '#666666',
-                'colorFondo'    => '#FFFFFF',
-                'opacidadFondo' => 0.8,
+                'colorFondo'    => '#00FFFF',
+                'opacidadFondo' => 1,
+                'mostrarFondo'  => true,
                 'posicion'      => 'inferior-derecha',
                 'tamanio'       => 14,
                 'mostrar'       => true,
@@ -331,15 +351,29 @@ class Flipbook_Ajax {
             wp_mkdir_p( $directorio );
         }
 
-        $permitidos = [ 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/mp4' ];
+        // MIME types aceptados. Incluye variantes que finfo puede devolver para m4a:
+        // audio/mp4 (estándar), audio/x-m4a, audio/mp4a-latm, audio/aac, y también
+        // video/mp4 / application/octet-stream (algunos servidores devuelven esto para .m4a).
+        $permitidos = [
+            'audio/mpeg', 'audio/mp3',
+            'audio/wav', 'audio/x-wav', 'audio/wave',
+            'audio/ogg', 'application/ogg',
+            'audio/mp4', 'audio/x-m4a', 'audio/mp4a-latm', 'audio/aac',
+            'video/mp4',
+        ];
 
         // Validar tipo MIME real del archivo (no solo la extensión)
         $finfo = finfo_open( FILEINFO_MIME_TYPE );
         $mime  = finfo_file( $finfo, $archivo['tmp_name'] );
         finfo_close( $finfo );
 
-        if ( ! in_array( $mime, $permitidos ) ) {
-            wp_send_json_error( 'Tipo de archivo de audio no permitido. Use mp3, wav u ogg.' );
+        // Fallback: si el MIME detectado es octet-stream o no está en la lista,
+        // permitir según extensión del archivo (mp3, wav, ogg, m4a, aac).
+        $ext = strtolower( pathinfo( $archivo['name'], PATHINFO_EXTENSION ) );
+        $ext_permitidas = [ 'mp3', 'wav', 'ogg', 'm4a', 'aac', 'mp4' ];
+
+        if ( ! in_array( $mime, $permitidos, true ) && ! in_array( $ext, $ext_permitidas, true ) ) {
+            wp_send_json_error( 'Tipo de archivo de audio no permitido. Use mp3, wav, ogg o m4a. (MIME detectado: ' . $mime . ')' );
         }
 
         $nombre_archivo = sanitize_file_name(
@@ -500,5 +534,393 @@ class Flipbook_Ajax {
         if ( $bytes >= 1048576 ) return round( $bytes / 1048576, 2 ) . ' MB';
         if ( $bytes >= 1024 )    return round( $bytes / 1024,    2 ) . ' KB';
         return $bytes . ' B';
+    }
+
+    /**
+     * Inserta una página (imagen renderizada) en un flipbook.
+     * Guarda la imagen en el servidor y registra la inserción en post_meta.
+     * Acción: flipbook_insertar_pagina
+     */
+    public static function insertar_pagina() {
+        check_ajax_referer( 'flipbook_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( 'No tienes permiso.' );
+        }
+
+        $flipbook_id      = intval( $_POST['flipbook_id'] ?? 0 );
+        $posicion          = sanitize_text_field( $_POST['posicion'] ?? 'despues' );
+        $pagina_flipbook   = intval( $_POST['pagina_flipbook'] ?? 1 );
+
+        if ( ! $flipbook_id || empty( $_FILES['imagen'] ) ) {
+            wp_send_json_error( 'Datos incompletos.' );
+        }
+
+        // Guardar la imagen
+        $dir_subidas = wp_upload_dir();
+        $directorio  = trailingslashit( $dir_subidas['basedir'] ) . 'flipbook-pages/';
+        $url_base    = trailingslashit( $dir_subidas['baseurl'] ) . 'flipbook-pages/';
+
+        if ( ! file_exists( $directorio ) ) {
+            wp_mkdir_p( $directorio );
+        }
+
+        $archivo    = $_FILES['imagen'];
+        $nombre     = 'fb' . $flipbook_id . '_inserted_' . time() . '_' . wp_rand( 100, 999 ) . '.jpg';
+        $destino    = $directorio . $nombre;
+
+        if ( ! move_uploaded_file( $archivo['tmp_name'], $destino ) ) {
+            wp_send_json_error( 'Error al guardar la imagen.' );
+        }
+
+        $url_imagen = $url_base . $nombre;
+
+        // Calcular idx (posición en el pageMap actual)
+        $idx = $pagina_flipbook - 1;
+        if ( $idx < 0 ) $idx = 0;
+        if ( $posicion === 'despues' ) $idx++;
+        $desde_pagina = $idx + 1; // 1-based
+
+        // Actualizar page_order: insertar la nueva página en la posición correcta
+        $page_order = self::obtener_page_order( $flipbook_id );
+        if ( $idx > count( $page_order ) ) $idx = count( $page_order );
+        array_splice( $page_order, $idx, 0, [ [ 'type' => 'inserted', 'url' => $url_imagen ] ] );
+        update_post_meta( $flipbook_id, '_flipbook_page_order', $page_order );
+
+        // Actualizar conteo de páginas
+        $paginas_actual = intval( get_post_meta( $flipbook_id, '_flipbook_pdf_pages', true ) );
+        update_post_meta( $flipbook_id, '_flipbook_pdf_pages', $paginas_actual + 1 );
+
+        // Desplazar overlays
+        global $wpdb;
+        $tabla = $wpdb->prefix . 'flipbook_overlays';
+        $wpdb->query( $wpdb->prepare(
+            "UPDATE $tabla SET pagina = pagina + 1 WHERE flipbook_id = %d AND pagina >= %d",
+            $flipbook_id,
+            $desde_pagina
+        ) );
+
+        // Desplazar claves de porPagina en la config de números de página
+        self::desplazar_porPagina( $flipbook_id, $desde_pagina, +1 );
+
+        wp_send_json_success( [
+            'mensaje'      => 'Página insertada correctamente.',
+            'url'          => $url_imagen,
+            'total'        => $paginas_actual + 1,
+            'desde_pagina' => $desde_pagina,
+        ] );
+    }
+
+    /**
+     * Elimina una página del flipbook.
+     * Para páginas insertadas: elimina el archivo de imagen y la entrada del meta.
+     * Para páginas del PDF: las marca como ocultas en un meta separado.
+     * Acción: flipbook_eliminar_pagina
+     */
+    public static function eliminar_pagina() {
+        check_ajax_referer( 'flipbook_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( 'No tienes permiso.' );
+        }
+
+        $flipbook_id  = intval( $_POST['flipbook_id'] ?? 0 );
+        $pagina_index = intval( $_POST['pagina_index'] ?? -1 );
+        $tipo_pagina  = sanitize_text_field( $_POST['tipo_pagina'] ?? '' );
+
+        if ( ! $flipbook_id || $pagina_index < 0 ) {
+            wp_send_json_error( 'Datos incompletos.' );
+        }
+
+        // Obtener page_order actual
+        $page_order = self::obtener_page_order( $flipbook_id );
+
+        if ( ! isset( $page_order[ $pagina_index ] ) ) {
+            wp_send_json_error( 'Índice de página inválido.' );
+        }
+
+        $entry = $page_order[ $pagina_index ];
+
+        if ( $entry['type'] === 'inserted' ) {
+            // Eliminar archivo físico de la página insertada
+            $dir_subidas = wp_upload_dir();
+            $ruta = str_replace( $dir_subidas['baseurl'], $dir_subidas['basedir'], $entry['url'] );
+            if ( file_exists( $ruta ) ) unlink( $ruta );
+        } else {
+            // Página del PDF: marcar como oculta
+            $hidden = get_post_meta( $flipbook_id, '_flipbook_hidden_pages', true );
+            if ( ! is_array( $hidden ) ) $hidden = [];
+            $hidden[] = $entry['num'];
+            update_post_meta( $flipbook_id, '_flipbook_hidden_pages', $hidden );
+        }
+
+        // Remover del page_order y guardar
+        array_splice( $page_order, $pagina_index, 1 );
+        update_post_meta( $flipbook_id, '_flipbook_page_order', $page_order );
+
+        // Decrementar conteo
+        $total = intval( get_post_meta( $flipbook_id, '_flipbook_pdf_pages', true ) );
+        if ( $total > 0 ) update_post_meta( $flipbook_id, '_flipbook_pdf_pages', $total - 1 );
+
+        // Desplazar overlays: la página eliminada estaba en posición pagina_index (0-based).
+        // Los overlays de esa página se eliminan, los de páginas posteriores se corren -1.
+        $pagina_eliminada = $pagina_index + 1; // 1-based
+        global $wpdb;
+        $tabla = $wpdb->prefix . 'flipbook_overlays';
+
+        // Eliminar overlays de la página borrada
+        $wpdb->delete( $tabla, [
+            'flipbook_id' => $flipbook_id,
+            'pagina'      => $pagina_eliminada,
+        ] );
+
+        // Desplazar overlays de páginas posteriores
+        $wpdb->query( $wpdb->prepare(
+            "UPDATE $tabla SET pagina = pagina - 1 WHERE flipbook_id = %d AND pagina > %d",
+            $flipbook_id,
+            $pagina_eliminada
+        ) );
+
+        // Desplazar claves de porPagina en la config de números de página
+        self::desplazar_porPagina( $flipbook_id, $pagina_eliminada, -1 );
+
+        wp_send_json_success( [
+            'mensaje'          => 'Página eliminada.',
+            'pagina_eliminada' => $pagina_eliminada,
+        ] );
+    }
+
+    /**
+     * Desplaza las claves del objeto porPagina en la config de números de página
+     * cuando se inserta o elimina una página.
+     *
+     * @param int $flipbook_id  ID del flipbook.
+     * @param int $desde        Número de página (1-based) a partir del cual desplazar.
+     * @param int $direccion    +1 para inserción (empujar hacia adelante), -1 para eliminación.
+     */
+    private static function desplazar_porPagina( $flipbook_id, $desde, $direccion ) {
+        $config = get_post_meta( $flipbook_id, '_flipbook_config_numeros', true );
+
+        if ( ! is_array( $config ) || empty( $config['porPagina'] ) || ! is_array( $config['porPagina'] ) ) {
+            return;
+        }
+
+        $porPagina = $config['porPagina'];
+        $nuevo     = [];
+
+        if ( $direccion === 1 ) {
+            // Inserción: claves >= $desde se incrementan en 1
+            foreach ( $porPagina as $pag => $val ) {
+                $pag = intval( $pag );
+                if ( $pag >= $desde ) {
+                    $nuevo[ $pag + 1 ] = $val;
+                } else {
+                    $nuevo[ $pag ] = $val;
+                }
+            }
+        } else {
+            // Eliminación: eliminar la clave $desde, claves > $desde se decrementan en 1
+            foreach ( $porPagina as $pag => $val ) {
+                $pag = intval( $pag );
+                if ( $pag === $desde ) {
+                    continue; // eliminar esta clave
+                } elseif ( $pag > $desde ) {
+                    $nuevo[ $pag - 1 ] = $val;
+                } else {
+                    $nuevo[ $pag ] = $val;
+                }
+            }
+        }
+
+        $config['porPagina'] = $nuevo;
+        update_post_meta( $flipbook_id, '_flipbook_config_numeros', $config );
+    }
+
+    /**
+     * Obtiene el page_order de un flipbook.
+     * Si no existe, lo reconstruye desde el formato legado (inserted_pages + hidden_pages).
+     *
+     * @param  int   $flipbook_id  ID del flipbook.
+     * @return array               Array de entradas [{type, num?, url?}, ...]
+     */
+    private static function obtener_page_order( $flipbook_id ) {
+        $page_order = get_post_meta( $flipbook_id, '_flipbook_page_order', true );
+        if ( is_array( $page_order ) && ! empty( $page_order ) ) {
+            return $page_order;
+        }
+
+        // Reconstruir desde formato legado
+        $hidden = get_post_meta( $flipbook_id, '_flipbook_hidden_pages', true );
+        if ( ! is_array( $hidden ) ) $hidden = [];
+
+        $inserted = get_post_meta( $flipbook_id, '_flipbook_inserted_pages', true );
+        if ( ! is_array( $inserted ) ) $inserted = [];
+
+        // Obtener el número real de páginas del PDF (sin ajustar por inserciones)
+        $total_meta = intval( get_post_meta( $flipbook_id, '_flipbook_pdf_pages', true ) );
+        // Calcular páginas PDF originales: total_meta es el total ajustado por inserciones/eliminaciones
+        // Necesitamos el número original: total_meta - count(inserted) + count(hidden)
+        $pdf_original = $total_meta - count( $inserted ) + count( $hidden );
+        if ( $pdf_original < 1 ) $pdf_original = $total_meta;
+
+        $page_order = [];
+        for ( $i = 1; $i <= $pdf_original; $i++ ) {
+            if ( ! in_array( $i, $hidden ) ) {
+                $page_order[] = [ 'type' => 'pdf', 'num' => $i ];
+            }
+        }
+
+        // Insertar en orden inverso (formato legado con posicion/pagina_flipbook)
+        $sorted = $inserted;
+        usort( $sorted, function( $a, $b ) {
+            return ( $b['pagina_flipbook'] ?? 0 ) - ( $a['pagina_flipbook'] ?? 0 );
+        });
+        foreach ( $sorted as $ins ) {
+            $idx = ( $ins['pagina_flipbook'] ?? 1 ) - 1;
+            if ( $idx < 0 ) $idx = 0;
+            if ( $idx > count( $page_order ) ) $idx = count( $page_order );
+            if ( ( $ins['posicion'] ?? '' ) === 'despues' ) $idx++;
+            array_splice( $page_order, $idx, 0, [ [ 'type' => 'inserted', 'url' => $ins['url'] ] ] );
+        }
+
+        return $page_order;
+    }
+
+    /**
+     * Mueve una página de una posición a otra dentro del flipbook.
+     * Actualiza page_order, overlays y porPagina.
+     * Si la página es del PDF, la oculta y la convierte en insertada con imagen.
+     * Acción: flipbook_mover_pagina
+     */
+    public static function mover_pagina() {
+        check_ajax_referer( 'flipbook_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( 'No tienes permiso.' );
+        }
+
+        $flipbook_id = intval( $_POST['flipbook_id'] ?? 0 );
+        $src_page    = intval( $_POST['src_page'] ?? 0 );    // 1-based
+        $dest_page   = intval( $_POST['dest_page'] ?? 0 );   // 1-based en el pageMap actual
+        $posicion    = sanitize_text_field( $_POST['posicion'] ?? 'antes' );
+
+        if ( ! $flipbook_id || ! $src_page || ! $dest_page ) {
+            wp_send_json_error( 'Datos incompletos.' );
+        }
+
+        $srcIdx     = $src_page - 1;
+        $rawDestIdx = $dest_page - 1;
+        if ( $posicion === 'despues' ) $rawDestIdx++;
+        $adjDestIdx = $rawDestIdx;
+        if ( $rawDestIdx > $srcIdx ) $adjDestIdx--;
+
+        if ( $adjDestIdx === $srcIdx ) {
+            wp_send_json_error( 'La página ya está en esa posición.' );
+        }
+
+        // Obtener page_order actual
+        $page_order = self::obtener_page_order( $flipbook_id );
+
+        if ( ! isset( $page_order[ $srcIdx ] ) ) {
+            wp_send_json_error( 'Índice de página origen inválido.' );
+        }
+
+        $movedEntry = $page_order[ $srcIdx ];
+        $movedUrl   = $movedEntry['url'] ?? '';
+
+        // Si es una página del PDF, necesita la imagen renderizada y se oculta
+        if ( $movedEntry['type'] === 'pdf' ) {
+            if ( empty( $_FILES['imagen'] ) ) {
+                wp_send_json_error( 'Se requiere la imagen de la página PDF.' );
+            }
+
+            $dir_subidas = wp_upload_dir();
+            $directorio  = trailingslashit( $dir_subidas['basedir'] ) . 'flipbook-pages/';
+            $url_base    = trailingslashit( $dir_subidas['baseurl'] ) . 'flipbook-pages/';
+            if ( ! file_exists( $directorio ) ) wp_mkdir_p( $directorio );
+
+            $archivo = $_FILES['imagen'];
+            $nombre  = 'fb' . $flipbook_id . '_moved_' . time() . '_' . wp_rand( 100, 999 ) . '.jpg';
+            $destino = $directorio . $nombre;
+
+            if ( ! move_uploaded_file( $archivo['tmp_name'], $destino ) ) {
+                wp_send_json_error( 'Error al guardar la imagen.' );
+            }
+
+            $movedUrl = $url_base . $nombre;
+
+            // Ocultar la página del PDF
+            $hidden = get_post_meta( $flipbook_id, '_flipbook_hidden_pages', true );
+            if ( ! is_array( $hidden ) ) $hidden = [];
+            $hidden[] = $movedEntry['num'];
+            update_post_meta( $flipbook_id, '_flipbook_hidden_pages', $hidden );
+
+            $movedEntry = [ 'type' => 'inserted', 'url' => $movedUrl ];
+        }
+
+        // Mover en page_order: quitar de la posición original e insertar en la nueva
+        array_splice( $page_order, $srcIdx, 1 );
+        if ( $adjDestIdx > count( $page_order ) ) $adjDestIdx = count( $page_order );
+        array_splice( $page_order, $adjDestIdx, 0, [ $movedEntry ] );
+        update_post_meta( $flipbook_id, '_flipbook_page_order', $page_order );
+
+        // Calcular newPage (1-based)
+        $newPage = $adjDestIdx + 1;
+
+        // Actualizar overlays con SQL
+        global $wpdb;
+        $tabla = $wpdb->prefix . 'flipbook_overlays';
+
+        // Paso 1: Marcar overlays de la página origen con valor temporal negativo
+        $wpdb->query( $wpdb->prepare(
+            "UPDATE $tabla SET pagina = -%d WHERE flipbook_id = %d AND pagina = %d",
+            $src_page, $flipbook_id, $src_page
+        ) );
+
+        // Paso 2: Desplazar overlays intermedios
+        if ( $src_page < $newPage ) {
+            $wpdb->query( $wpdb->prepare(
+                "UPDATE $tabla SET pagina = pagina - 1 WHERE flipbook_id = %d AND pagina > %d AND pagina <= %d",
+                $flipbook_id, $src_page, $newPage
+            ) );
+        } else {
+            $wpdb->query( $wpdb->prepare(
+                "UPDATE $tabla SET pagina = pagina + 1 WHERE flipbook_id = %d AND pagina >= %d AND pagina < %d",
+                $flipbook_id, $newPage, $src_page
+            ) );
+        }
+
+        // Paso 3: Asignar página destino a los overlays marcados
+        $wpdb->query( $wpdb->prepare(
+            "UPDATE $tabla SET pagina = %d WHERE flipbook_id = %d AND pagina = -%d",
+            $newPage, $flipbook_id, $src_page
+        ) );
+
+        // Actualizar porPagina en la config de números de página
+        $config = get_post_meta( $flipbook_id, '_flipbook_config_numeros', true );
+        if ( is_array( $config ) && ! empty( $config['porPagina'] ) && is_array( $config['porPagina'] ) ) {
+            $pp = $config['porPagina'];
+            $ppNuevo = [];
+            foreach ( $pp as $pag => $val ) {
+                $pag = intval( $pag );
+                if ( $pag === $src_page ) {
+                    $ppNuevo[ $newPage ] = $val;
+                } elseif ( $src_page < $newPage && $pag > $src_page && $pag <= $newPage ) {
+                    $ppNuevo[ $pag - 1 ] = $val;
+                } elseif ( $src_page > $newPage && $pag >= $newPage && $pag < $src_page ) {
+                    $ppNuevo[ $pag + 1 ] = $val;
+                } else {
+                    $ppNuevo[ $pag ] = $val;
+                }
+            }
+            $config['porPagina'] = $ppNuevo;
+            update_post_meta( $flipbook_id, '_flipbook_config_numeros', $config );
+        }
+
+        wp_send_json_success( [
+            'mensaje'      => 'Página movida correctamente.',
+            'nueva_pagina' => $newPage,
+            'url'          => $movedUrl,
+        ] );
     }
 }

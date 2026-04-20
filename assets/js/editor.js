@@ -18,6 +18,7 @@
         pdfDoc:          null,
         overlays:        [],
         seleccionado:    null,
+        pageMap:         [],
         arrastrando:     false,
         redimensionando: false,
         arrastre:        { offsetX: 0, offsetY: 0 },
@@ -27,19 +28,46 @@
     // Configuración de números de página (objeto separado, se persiste en BD)
     const configNumerosPage = {
         colorNumero:    '#666666',
-        colorFondo:     '#FFFFFF',
-        opacidadFondo:  0.8,
-        posicion:       'inferior-derecha',
+        colorFondo:     '#00FFFF',
+        opacidadFondo:  1,
+        mostrarFondo:   true,
+        posicion:       'inferior-centro',
         tamanio:        14,
         mostrar:        true,
+    };
+
+    // Snapshot de los colores globales originales. Se usa para distinguir overrides
+    // por página de los valores globales. Debe vivir en el scope exterior porque lo
+    // leen tanto construirEditor() como cargarOverlays() (callback asíncrono).
+    var _globalOriginal = {
+        colorNumero:   configNumerosPage.colorNumero,
+        colorFondo:    configNumerosPage.colorFondo,
+        opacidadFondo: configNumerosPage.opacidadFondo,
+        mostrarFondo:  configNumerosPage.mostrarFondo,
     };
 
     const COLOR_AUDIO = '#C70000';
     let contadorTemp  = 1;
 
-    // Estado interno del slider de preview en modal
+    // Límite de tamaño por imagen del slider (bytes). 10 MB, igual que audio.
+    const MAX_SLIDE_BYTES = 10 * 1024 * 1024;
+
+    // Estado interno del slider de preview en modal.
+    // Cada entrada es { src: dataURL|urlPublica, tamanio: bytes|0 }.
+    // Las imágenes cargadas al editar un overlay existente tienen tamanio=0
+    // porque solo conocemos su URL pública, no su peso en disco.
     let previewSlides = [];
     let previewIndice = 0;
+
+    function formatearBytes( bytes ) {
+        if ( ! bytes ) return '';
+        if ( bytes >= 1048576 ) return ( bytes / 1048576 ).toFixed( 2 ) + ' MB';
+        if ( bytes >= 1024 )    return ( bytes / 1024 ).toFixed( 2 ) + ' KB';
+        return bytes + ' B';
+    }
+
+    // PDF cargado para insertar página
+    var _insertarPdfDoc = null;
 
     /* =========================================================
        INIT
@@ -107,6 +135,10 @@
                         <span class="icono-herramienta" style="color:${COLOR_AUDIO}">🔊</span>
                         Insertar sonido
                     </button>
+                    <button class="btn-herramienta" data-tipo="pagina">
+                        <span class="icono-herramienta">📄</span>
+                        Insertar página
+                    </button>
 
                     <div class="separador"></div>
                     <div class="sidebar-titulo">Página</div>
@@ -121,6 +153,8 @@
                         <span id="total-paginas">0</span>
                         <button id="btn-siguiente">›</button>
                     </div>
+                    <button id="btn-mover-pagina" class="btn-secundario" style="width:100%;margin-top:8px;font-size:12px;padding:6px;">↔ Mover esta página</button>
+                    <button id="btn-eliminar-pagina" class="btn-peligro" style="width:100%;margin-top:4px;font-size:12px;padding:6px;">🗑 Eliminar esta página</button>
 
                     <!-- SECCIÓN NÚMEROS DE PÁGINA -->
                     <div class="separador"></div>
@@ -132,6 +166,12 @@
                             Mostrar números
                         </label>
                     </div>
+                    <div style="margin-bottom:8px;">
+                        <label class="pnum-check-label">
+                            <input type="checkbox" id="cfg-solo-esta-pagina" checked />
+                            Aplicar colores solo a esta página
+                        </label>
+                    </div>
                     <div style="margin-bottom:10px;">
                         <label class="pnum-label">Color del número:</label>
                         <div class="pnum-color-fila">
@@ -139,28 +179,53 @@
                             <span id="cfg-color-numero-hex" class="pnum-hex">#666666</span>
                         </div>
                     </div>
-                    <div style="margin-bottom:10px;">
-                        <label class="pnum-label">Color fondo:</label>
-                        <div class="pnum-color-fila">
-                            <input type="color" id="cfg-color-fondo" value="#FFFFFF" />
-                            <span id="cfg-color-fondo-hex" class="pnum-hex">#FFFFFF</span>
-                        </div>
+                    <div style="margin-bottom:6px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+                            <input type="checkbox" id="cfg-mostrar-fondo" checked />
+                            Mostrar color de fondo
+                        </label>
                     </div>
-                    <div style="margin-bottom:10px;">
-                        <label class="pnum-label">Opacidad fondo: <span id="cfg-opacidad-val">80</span>%</label>
-                        <input type="range" id="cfg-opacidad" min="0" max="100" value="80" class="pnum-slider" />
+                    <div id="cfg-fondo-controles">
+                        <div style="margin-bottom:10px;">
+                            <label class="pnum-label">Color fondo:</label>
+                            <div class="pnum-color-fila">
+                                <input type="color" id="cfg-color-fondo" value="#00FFFF" />
+                                <span id="cfg-color-fondo-hex" class="pnum-hex">#00FFFF</span>
+                            </div>
+                        </div>
+                        <div style="margin-bottom:10px;">
+                            <label class="pnum-label">Opacidad fondo: <span id="cfg-opacidad-val">100</span>%</label>
+                            <input type="range" id="cfg-opacidad" min="0" max="100" value="100" class="pnum-slider" />
+                        </div>
                     </div>
                     <div style="margin-bottom:10px;">
                         <label class="pnum-label">Posición:</label>
                         <select id="cfg-posicion" class="pnum-select">
-                            <option value="inferior-derecha" selected>Inferior derecha</option>
+                            <option value="inferior-derecha">Inferior derecha</option>
                             <option value="inferior-izquierda">Inferior izquierda</option>
-                            <option value="inferior-centro">Inferior centro</option>
+                            <option value="inferior-centro" selected>Inferior centro</option>
                             <option value="superior-derecha">Superior derecha</option>
                             <option value="superior-izquierda">Superior izquierda</option>
                             <option value="superior-centro">Superior centro</option>
                             <option value="centro">Centro</option>
+                            <option value="personalizada">Personalizada (X, Y)</option>
                         </select>
+                    </div>
+                    <div id="cfg-pos-custom" style="display:none;margin-bottom:10px;">
+                        <div class="grilla-posicion-compacta">
+                            <div class="campo-pos-compacto">
+                                <span class="pos-label">X</span>
+                                <div class="input-porcentaje">
+                                    <input type="number" id="cfg-num-x" step="0.1" value="50" /><span>%</span>
+                                </div>
+                            </div>
+                            <div class="campo-pos-compacto">
+                                <span class="pos-label">Y</span>
+                                <div class="input-porcentaje">
+                                    <input type="number" id="cfg-num-y" step="0.1" value="95" /><span>%</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div style="margin-bottom:10px;">
                         <label class="pnum-label">Tamaño de fuente: <span id="cfg-tamanio-val">14</span>px</label>
@@ -196,6 +261,30 @@
                             </div>
                         </div>
                         <button id="btn-eliminar" class="btn-peligro">🗑 Eliminar elemento</button>
+
+                        <!-- Opciones específicas de audio (solo visible cuando se selecciona un audio) -->
+                        <div id="panel-audio-opciones" style="display:none;margin-top:10px;">
+                            <div class="separador"></div>
+                            <div class="sidebar-titulo">🔊 Opciones de audio</div>
+                            <label class="pnum-check-label" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;">
+                                <span>Autoplay</span>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="ov-audio-autoplay" />
+                                    <span class="toggle-slider-ui"></span>
+                                </div>
+                            </label>
+                        </div>
+
+                        <!-- Opciones específicas de presentación -->
+                        <div id="panel-presentacion-opciones" style="display:none;margin-top:10px;">
+                            <div class="separador"></div>
+                            <div class="sidebar-titulo">📽 Opciones de presentación</div>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                <button id="btn-editar-presentacion" class="btn-accion-ov" type="button">✏ Editar</button>
+                                <button id="btn-copiar-presentacion" class="btn-accion-ov" type="button">📋 Copiar</button>
+                                <button id="btn-eliminar-presentacion" class="btn-accion-ov btn-accion-ov-danger" type="button">🗑 Eliminar</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -284,7 +373,7 @@
                 </div>
                 <div class="modal-cuerpo">
                     <div class="zona-arrastre clickable" id="zona-slides-click">
-                        <span>⬆ Haz clic para seleccionar imágenes (máx. 10)</span>
+                        <span>⬆ Haz clic para seleccionar imágenes (máx. 10, 10 MB por imagen)</span>
                         <input type="file" id="archivos-slides" accept="image/*" multiple style="display:none;" />
                     </div>
 
@@ -292,14 +381,8 @@
                         <div class="slides-preview-header">
                             <span id="slides-preview-contador"></span>
                         </div>
-                        <div class="slides-slider-wrap">
-                            <button class="slide-nav-btn slide-prev-btn" type="button">‹</button>
-                            <div class="slide-viewport">
-                                <div id="slides-track"></div>
-                            </div>
-                            <button class="slide-nav-btn slide-next-btn" type="button">›</button>
-                        </div>
-                        <div class="slides-dots" id="slides-dots"></div>
+                        <!-- Lista de imágenes con drag & drop para reordenar -->
+                        <div id="slides-list" class="slides-sortable-list"></div>
                     </div>
 
                     <small>La primera imagen establece la relación de aspecto del overlay.</small>
@@ -316,10 +399,10 @@
                             <label>Tiempo por imagen:</label>
                             <select id="slide-duracion">
                                 <option value="1">1 segundo</option>
-                                <option value="2">2 segundo</option>
-                                <option value="3" selected>3 segundo</option>
-                                <option value="4">4 segundo</option>
-                                <option value="5">5 segundo</option>
+                                <option value="2">2 segundos</option>
+                                <option value="3" selected>3 segundos</option>
+                                <option value="4">4 segundos</option>
+                                <option value="5">5 segundos</option>
                             </select>
                         </div>
                         <div>
@@ -349,7 +432,7 @@
                     <div class="fila-toggle-audio">
                         <label>Autoplay</label>
                         <label class="toggle">
-                            <input type="checkbox" id="audio-autoplay" />
+                            <input type="checkbox" id="audio-autoplay" checked />
                             <span class="toggle-slider"></span>
                         </label>
                     </div>
@@ -357,13 +440,13 @@
                     <div class="audio-color-config">
                         <label for="audio-icon-color">Color del ícono:</label>
                         <div class="audio-color-fila">
-                            <input type="color" id="audio-icon-color" value="#ffffff" />
-                            <span id="audio-icon-color-hex">#ffffff</span>
+                            <input type="color" id="audio-icon-color" value="#C70000" />
+                            <span id="audio-icon-color-hex">#C70000</span>
                         </div>
                     </div>
 
                     <div class="zona-arrastre clickable" id="zona-audio-click">
-                        <span id="audio-zona-texto">⬆ Haz clic para seleccionar audio (mp3, wav, ogg)</span>
+                        <span id="audio-zona-texto">⬆ Haz clic para seleccionar audio (<<mp3>>, wav, ogg, m4a)</span>
                         <input type="file" id="archivo-audio"
                                accept=".mp3,.wav,.ogg,.m4a,audio/mpeg,audio/wav,audio/ogg,audio/mp4"
                                style="display:none;" />
@@ -457,6 +540,9 @@
                         <button class="link-icono-btn activo" data-icono="ninguno" type="button" title="Sin ícono">
                             Ninguno
                         </button>
+                        <button class="link-icono-btn" data-icono="invisible" type="button" title="Área invisible (sin ícono ni borde en el visor)">
+                            Invisible
+                        </button>
                         <button class="link-icono-btn" data-icono="mas" type="button" title="Más / Añadir">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
                         </button>
@@ -498,6 +584,76 @@
                 </div>
             </div>
         </div>
+
+        <!-- MODAL Insertar página -->
+        <div id="modal-pagina" class="modal" style="display:none;">
+            <div class="modal-contenido modal-ancho">
+                <div class="modal-cabecera">
+                    <h3>Insertar página</h3>
+                    <button class="cerrar-modal">✕</button>
+                </div>
+                <div class="modal-cuerpo">
+                    <div class="zona-arrastre clickable" id="zona-pdf-insertar">
+                        <span id="pdf-insertar-texto">Selecciona un archivo PDF. Tamaño máximo permitido: 512 MB.</span>
+                        <button class="btn-seleccionar-archivo" type="button">Seleccionar archivo</button>
+                        <input type="file" id="archivo-pdf-insertar" accept=".pdf" style="display:none;" />
+                    </div>
+
+                    <div id="insertar-opciones" style="display:none;">
+                        <div style="margin-bottom:12px;">
+                            <label class="pnum-label">Página del PDF:</label>
+                            <select id="insertar-pagina-pdf" class="pnum-select"></select>
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label class="pnum-label">Insertar:</label>
+                            <div class="dos-columnas" style="grid-template-columns:1fr 1fr;">
+                                <label class="pnum-check-label"><input type="radio" name="insertar-posicion" value="antes" checked /> Antes de</label>
+                                <label class="pnum-check-label"><input type="radio" name="insertar-posicion" value="despues" /> Después de</label>
+                            </div>
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label class="pnum-label">Página del flipbook:</label>
+                            <select id="insertar-pagina-flipbook" class="pnum-select"></select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-pie">
+                    <button class="btn-secundario cerrar-modal">Cancelar</button>
+                    <button id="confirmar-insertar-pagina" class="btn-confirmar" disabled>De acuerdo</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL Mover página -->
+        <div id="modal-mover" class="modal" style="display:none;">
+            <div class="modal-contenido modal-ancho">
+                <div class="modal-cabecera">
+                    <h3>Mover página</h3>
+                    <button class="cerrar-modal">✕</button>
+                </div>
+                <div class="modal-cuerpo">
+                    <div style="margin-bottom:12px;">
+                        <label class="pnum-label">Página a mover:</label>
+                        <select id="mover-pagina-origen" class="pnum-select" disabled></select>
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label class="pnum-label">Mover:</label>
+                        <div class="dos-columnas" style="grid-template-columns:1fr 1fr;">
+                            <label class="pnum-check-label"><input type="radio" name="mover-posicion" value="antes" checked /> Antes de</label>
+                            <label class="pnum-check-label"><input type="radio" name="mover-posicion" value="despues" /> Después de</label>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label class="pnum-label">Página del flipbook:</label>
+                        <select id="mover-pagina-flipbook" class="pnum-select"></select>
+                    </div>
+                </div>
+                <div class="modal-pie">
+                    <button class="btn-secundario cerrar-modal">Cancelar</button>
+                    <button id="confirmar-mover-pagina" class="btn-confirmar">De acuerdo</button>
+                </div>
+            </div>
+        </div>
         `;
 
         $( '#flipbook-cargando' ).replaceWith( html );
@@ -508,6 +664,14 @@
        EVENTOS
     ========================================================= */
     function vincularEventos() {
+
+        // Actualizar título de la pestaña del navegador con el nombre del flipbook
+        function actualizarTituloPestana() {
+            var t = $( '#input-titulo' ).val().trim();
+            document.title = ( t || 'Nuevo Flipbook' ) + ' — Flipbook Editor';
+        }
+        actualizarTituloPestana();
+        $( '#input-titulo' ).on( 'input', actualizarTituloPestana );
 
         // PDF upload
         $( '#input-pdf' ).on( 'change', function () {
@@ -567,13 +731,6 @@
         $( document ).on( 'change', '#archivos-slides', function () {
             if ( this.files.length ) cargarPreviewSlides( this.files );
         });
-        $( document ).on( 'click', '.slide-prev-btn', () => navegarPreviewSlide( -1 ) );
-        $( document ).on( 'click', '.slide-next-btn', () => navegarPreviewSlide( +1 ) );
-        $( document ).on( 'click', '.slide-dot', function () {
-            previewIndice = parseInt( $( this ).data( 'i' ) );
-            actualizarDotsSlide();
-            actualizarTrackSlide();
-        });
 
         // ---- Audio: abrir file input al hacer clic ----
         $( document ).on( 'click', '#zona-audio-click', function ( e ) {
@@ -618,6 +775,42 @@
         $( '#confirmar-presentacion' ).on( 'click', confirmarPresentacion );
         $( '#confirmar-audio'        ).on( 'click', confirmarAudio );
         $( '#confirmar-link'         ).on( 'click', confirmarLink );
+        $( '#confirmar-insertar-pagina' ).on( 'click', confirmarInsertarPagina );
+
+        // ---- Insertar página: abrir file input ----
+        $( document ).on( 'click', '#zona-pdf-insertar', function ( e ) {
+            if ( $( e.target ).is( 'input' ) ) return;
+            $( '#archivo-pdf-insertar' ).click();
+        });
+        $( document ).on( 'click', '.btn-seleccionar-archivo', function () {
+            $( '#archivo-pdf-insertar' ).click();
+        });
+        _insertarPdfDoc = null;
+        $( document ).on( 'change', '#archivo-pdf-insertar', function () {
+            var f = this.files[0];
+            if ( ! f ) return;
+            var reader = new FileReader();
+            reader.onload = function ( ev ) {
+                pdfjsLib.getDocument({ data: new Uint8Array( ev.target.result ) }).promise.then( function ( pdf ) {
+                    _insertarPdfDoc = pdf;
+                    var sel = $( '#insertar-pagina-pdf' ).empty();
+                    for ( var i = 1; i <= pdf.numPages; i++ ) {
+                        sel.append( '<option value="' + i + '">Página ' + i + '</option>' );
+                    }
+                    // Poblar dropdown de páginas del flipbook
+                    var selFb = $( '#insertar-pagina-flipbook' ).empty();
+                    for ( var j = 1; j <= estado.totalPaginas; j++ ) {
+                        selFb.append( '<option value="' + j + '">Página ' + j + '</option>' );
+                    }
+                    $( '#insertar-opciones' ).show();
+                    $( '#pdf-insertar-texto' ).text( '✓ ' + f.name + ' (' + pdf.numPages + ' páginas)' );
+                    $( '#confirmar-insertar-pagina' ).prop( 'disabled', false );
+                }).catch( function () {
+                    alert( 'Error al cargar el PDF.' );
+                });
+            };
+            reader.readAsArrayBuffer( f );
+        });
 
         // ---- Eventos del modal de enlace ----
 
@@ -637,7 +830,8 @@
         $( document ).on( 'click', '.link-icono-btn', function () {
             $( '.link-icono-btn' ).removeClass( 'activo' );
             $( this ).addClass( 'activo' );
-            const tieneIcono = $( this ).data( 'icono' ) !== 'ninguno';
+            const iconoSel   = $( this ).data( 'icono' );
+            const tieneIcono = iconoSel !== 'ninguno' && iconoSel !== 'invisible';
             $( '#link-color-wrap' ).toggle( tieneIcono );
         });
 
@@ -668,7 +862,132 @@
         // Panel de posición
         $( '#pos-left, #pos-top, #pos-ancho, #pos-alto' ).on( 'input', actualizarDesdeInputs );
         $( '#btn-eliminar' ).on( 'click', eliminarSeleccionado );
+
+        // ---- Acciones de presentación (editar, copiar, eliminar) ----
+        $( '#btn-eliminar-presentacion' ).on( 'click', eliminarSeleccionado );
+
+        $( '#btn-copiar-presentacion' ).on( 'click', function () {
+            if ( ! estado.seleccionado ) return;
+            var ov = obtenerOverlay( estado.seleccionado );
+            if ( ! ov || ov.tipo !== 'presentacion' ) return;
+            agregarOverlay( 'presentacion',
+                JSON.parse( JSON.stringify( ov.datos ) ),
+                ov.left + 2, ov.top + 2, ov.ancho, ov.alto
+            );
+        });
+
+        $( '#btn-editar-presentacion' ).on( 'click', function () {
+            if ( ! estado.seleccionado ) return;
+            var ov = obtenerOverlay( estado.seleccionado );
+            if ( ! ov || ov.tipo !== 'presentacion' ) return;
+
+            // Abrir modal de presentación pre-llenado con los datos actuales
+            abrirModal( 'presentacion' );
+
+            // Cargar las imágenes existentes en previewSlides.
+            // Solo conocemos la URL pública; el peso no está disponible en el cliente.
+            var imgs = ov.datos.imagenes || [];
+            previewSlides = imgs.map( function ( u ) {
+                return { src: u, tamanio: 0 };
+            });
+
+            if ( previewSlides.length ) {
+                renderizarListaSlides( previewSlides.length );
+            }
+
+            // Restaurar checkboxes y selects
+            $( '#slide-autoplay'  ).prop( 'checked', !! ov.datos.autoplay );
+            $( '#slide-loop'      ).prop( 'checked', !! ov.datos.loop );
+            $( '#slide-aleatorio' ).prop( 'checked', !! ov.datos.aleatorio );
+            $( '#slide-flechas'   ).prop( 'checked', ov.datos.flechas !== false );
+            $( '#slide-duracion'  ).val( ov.datos.duracion || 3 );
+            $( '#slide-transicion').val( ov.datos.transicion || 'slide' );
+
+            // Marcar que estamos editando (no creando nuevo)
+            $( '#confirmar-presentacion' ).data( 'editando', ov.tempId );
+        });
         $( '#btn-guardar'  ).on( 'click', guardarTodo );
+
+        // ---- Eliminar página ----
+        $( '#btn-eliminar-pagina' ).on( 'click', function () {
+            if ( ! estado.flipbookId || ! estado.pageMap.length ) return;
+
+            var entry = estado.pageMap[ estado.paginaActual - 1 ];
+            if ( ! entry ) return;
+
+            var tipo = entry.type === 'inserted' ? 'insertada' : 'del PDF';
+            if ( ! confirm( '¿Eliminar la página ' + estado.paginaActual + ' (' + tipo + ')?\n\nEsta acción no se puede deshacer.' ) ) return;
+
+            $( '#btn-eliminar-pagina' ).text( 'Eliminando…' ).prop( 'disabled', true );
+
+            $.post( contraplanoFlipbookAdmin.ajax_url, {
+                action:       'flipbook_eliminar_pagina',
+                nonce:        contraplanoFlipbookAdmin.nonce,
+                flipbook_id:  estado.flipbookId,
+                pagina_index: estado.paginaActual - 1,
+                tipo_pagina:  entry.type,
+            }, function ( r ) {
+                $( '#btn-eliminar-pagina' ).text( '🗑 Eliminar esta página' ).prop( 'disabled', false );
+                if ( r.success ) {
+                    var paginaEliminada = estado.paginaActual; // 1-based
+
+                    // Eliminar overlays de la página borrada y desplazar los posteriores
+                    estado.overlays = estado.overlays.filter( function ( ov ) {
+                        return ov.pagina !== paginaEliminada;
+                    });
+                    estado.overlays.forEach( function ( ov ) {
+                        if ( ov.pagina > paginaEliminada ) ov.pagina--;
+                    });
+
+                    // Desplazar config de números por página (porPagina)
+                    var ppNuevo = {};
+                    Object.keys( configNumerosPage.porPagina || {} ).forEach( function ( k ) {
+                        var p = parseInt( k );
+                        if ( p === paginaEliminada ) return; // la página eliminada se descarta
+                        if ( p > paginaEliminada ) ppNuevo[ p - 1 ] = configNumerosPage.porPagina[ k ];
+                        else ppNuevo[ p ] = configNumerosPage.porPagina[ k ];
+                    });
+                    configNumerosPage.porPagina = ppNuevo;
+
+                    // Remover del pageMap local
+                    estado.pageMap.splice( estado.paginaActual - 1, 1 );
+                    estado.totalPaginas = estado.pageMap.length;
+                    $( '#total-paginas' ).text( estado.totalPaginas );
+                    $( '#input-pagina' ).attr( 'max', estado.totalPaginas );
+
+                    // Actualizar page_order local (fuente de verdad)
+                    contraplanoFlipbookAdmin.page_order = estado.pageMap.slice();
+
+                    // Navegar a la página anterior o la primera
+                    var nuevaPag = Math.min( estado.paginaActual, estado.totalPaginas );
+                    if ( nuevaPag < 1 ) nuevaPag = 1;
+                    renderizarPagina( nuevaPag );
+                } else {
+                    alert( 'Error: ' + ( r.data || 'No se pudo eliminar.' ) );
+                }
+            });
+        });
+
+        // ---- Mover página ----
+        $( '#btn-mover-pagina' ).on( 'click', function () {
+            if ( ! estado.flipbookId || ! estado.pageMap.length ) return;
+            if ( estado.totalPaginas < 2 ) { alert( 'No hay suficientes páginas para mover.' ); return; }
+
+            // Mostrar la página que se va a mover (select deshabilitado, solo informativo)
+            $( '#mover-pagina-origen' ).empty().append(
+                '<option value="' + estado.paginaActual + '">Página ' + estado.paginaActual + '</option>'
+            );
+
+            // Poblar dropdown de destino con todas las páginas
+            var sel = $( '#mover-pagina-flipbook' ).empty();
+            for ( var j = 1; j <= estado.totalPaginas; j++ ) {
+                sel.append( '<option value="' + j + '">Página ' + j + '</option>' );
+            }
+            $( '#confirmar-mover-pagina' ).text( 'De acuerdo' ).prop( 'disabled', false );
+            $( '#fondo-modal' ).show();
+            $( '#modal-mover' ).show();
+        });
+        $( '#confirmar-mover-pagina' ).on( 'click', confirmarMoverPagina );
 
         // Vista previa — abre el visor en nueva pestaña
         $( document ).on( 'click', '#btn-preview', function () {
@@ -678,33 +997,124 @@
             window.open( url, '_blank' );
         });
 
-        // ---- Números de página (versión Maverick con IDs cfg-*) ----
+        // ---- Números de página (con soporte por página) ----
+        if ( ! configNumerosPage.porPagina ) configNumerosPage.porPagina = {};
+
+        function getNumCfgActual() {
+            var pp = configNumerosPage.porPagina[ estado.paginaActual ];
+            if ( pp ) {
+                return Object.assign( {}, configNumerosPage, pp );
+            }
+            return configNumerosPage;
+        }
+
+        function setNumProp( prop, val ) {
+            // SIEMPRE: si la página actual tiene override, guardar ahí
+            // Si no tiene override pero el checkbox está marcado, crear uno
+            var pp = configNumerosPage.porPagina[ estado.paginaActual ];
+            if ( pp || $( '#cfg-solo-esta-pagina' ).is( ':checked' ) ) {
+                if ( ! configNumerosPage.porPagina[ estado.paginaActual ] ) {
+                    configNumerosPage.porPagina[ estado.paginaActual ] = {};
+                }
+                configNumerosPage.porPagina[ estado.paginaActual ][ prop ] = val;
+            } else {
+                // Sin override y sin checkbox: cambiar el global
+                configNumerosPage[ prop ] = val;
+                // Actualizar snapshot del global
+                if ( prop in _globalOriginal ) _globalOriginal[ prop ] = val;
+            }
+        }
+
+        function sincronizarUINumeros() {
+            var cfg = getNumCfgActual();
+            $( '#cfg-color-numero' ).val( cfg.colorNumero || '#666666' );
+            $( '#cfg-color-numero-hex' ).text( cfg.colorNumero || '#666666' );
+            $( '#cfg-color-fondo' ).val( cfg.colorFondo || '#00FFFF' );
+            $( '#cfg-color-fondo-hex' ).text( cfg.colorFondo || '#00FFFF' );
+            $( '#cfg-opacidad' ).val( Math.round( ( cfg.opacidadFondo != null ? cfg.opacidadFondo : 1 ) * 100 ) );
+            $( '#cfg-opacidad-val' ).text( Math.round( ( cfg.opacidadFondo != null ? cfg.opacidadFondo : 1 ) * 100 ) );
+            var mostrarFondo = ( cfg.mostrarFondo !== false );
+            $( '#cfg-mostrar-fondo' ).prop( 'checked', mostrarFondo );
+            $( '#cfg-fondo-controles' ).toggle( mostrarFondo );
+            // No tocamos #cfg-solo-esta-pagina: se mantiene como la dejó el usuario.
+        }
+        _sincronizarUINumeros = sincronizarUINumeros;
+
         $( '#cfg-mostrar-numeros' ).on( 'change', function () {
             configNumerosPage.mostrar = this.checked;
             renderizarPagina( estado.paginaActual );
         });
         $( '#cfg-color-numero' ).on( 'input', function () {
-            configNumerosPage.colorNumero = this.value;
+            setNumProp( 'colorNumero', this.value );
             $( '#cfg-color-numero-hex' ).text( this.value );
             renderizarPagina( estado.paginaActual );
         });
+
+        // Toggle autoplay en sidebar para audio seleccionado
+        $( '#ov-audio-autoplay' ).on( 'change', function () {
+            if ( ! estado.seleccionado ) return;
+            var ov = obtenerOverlay( estado.seleccionado );
+            if ( ov && ov.tipo === 'audio' && ov.datos ) {
+                ov.datos.autoplay = this.checked;
+                renderizarOverlays();
+            }
+        });
         $( '#cfg-color-fondo' ).on( 'input', function () {
-            configNumerosPage.colorFondo = this.value;
+            setNumProp( 'colorFondo', this.value );
             $( '#cfg-color-fondo-hex' ).text( this.value );
             renderizarPagina( estado.paginaActual );
         });
         $( '#cfg-opacidad' ).on( 'input', function () {
-            configNumerosPage.opacidadFondo = parseInt( this.value ) / 100;
+            setNumProp( 'opacidadFondo', parseInt( this.value ) / 100 );
             $( '#cfg-opacidad-val' ).text( this.value );
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-mostrar-fondo' ).on( 'change', function () {
+            setNumProp( 'mostrarFondo', this.checked );
+            $( '#cfg-fondo-controles' ).toggle( this.checked );
             renderizarPagina( estado.paginaActual );
         });
         $( '#cfg-posicion' ).on( 'change', function () {
             configNumerosPage.posicion = this.value;
+            if ( this.value === 'personalizada' ) {
+                $( '#cfg-pos-custom' ).show();
+                configNumerosPage.customX = parseFloat( $( '#cfg-num-x' ).val() ) || 50;
+                configNumerosPage.customY = parseFloat( $( '#cfg-num-y' ).val() ) || 95;
+            } else {
+                $( '#cfg-pos-custom' ).hide();
+            }
+            renderizarPagina( estado.paginaActual );
+        });
+        $( '#cfg-num-x, #cfg-num-y' ).on( 'input', function () {
+            configNumerosPage.customX = parseFloat( $( '#cfg-num-x' ).val() ) || 50;
+            configNumerosPage.customY = parseFloat( $( '#cfg-num-y' ).val() ) || 95;
             renderizarPagina( estado.paginaActual );
         });
         $( '#cfg-tamanio' ).on( 'input', function () {
             configNumerosPage.tamanio = parseInt( this.value );
             $( '#cfg-tamanio-val' ).text( this.value );
+            renderizarPagina( estado.paginaActual );
+        });
+        // Cuando se activa "solo esta página", crear override con valores actuales de los inputs
+        // Cuando se desactiva, eliminar el override y restaurar inputs a los globales
+        $( '#cfg-solo-esta-pagina' ).on( 'change', function () {
+            if ( this.checked ) {
+                configNumerosPage.porPagina[ estado.paginaActual ] = {
+                    colorNumero:   $( '#cfg-color-numero' ).val(),
+                    colorFondo:    $( '#cfg-color-fondo' ).val(),
+                    opacidadFondo: parseInt( $( '#cfg-opacidad' ).val() ) / 100,
+                    mostrarFondo:  $( '#cfg-mostrar-fondo' ).is( ':checked' ),
+                };
+                // Restaurar los globales a sus valores originales (antes de que el usuario los editara)
+                configNumerosPage.colorNumero   = _globalOriginal.colorNumero;
+                configNumerosPage.colorFondo    = _globalOriginal.colorFondo;
+                configNumerosPage.opacidadFondo = _globalOriginal.opacidadFondo;
+                configNumerosPage.mostrarFondo  = _globalOriginal.mostrarFondo;
+            } else {
+                delete configNumerosPage.porPagina[ estado.paginaActual ];
+                // Restaurar inputs a los valores globales
+                sincronizarUINumeros();
+            }
             renderizarPagina( estado.paginaActual );
         });
     }
@@ -722,64 +1132,169 @@
        PREVIEW SLIDER (modal presentación)
     ========================================================= */
     function cargarPreviewSlides( archivos ) {
-        previewSlides = [];
-        previewIndice = 0;
-        const max     = Math.min( archivos.length, 10 );
-        let cargados  = 0;
+        // Siempre se agrega al array existente. El reset a [] ocurre al abrir el modal;
+        // al editar, previewSlides ya viene precargado con las imágenes actuales.
+        var existentes = previewSlides.length;
+        var espacioDisponible = 10 - existentes;
 
-        $( '#slides-preview-area' ).hide();
-        $( '#confirmar-presentacion' ).prop( 'disabled', true );
+        if ( espacioDisponible <= 0 ) {
+            alert( 'Ya tienes el máximo de 10 imágenes.' );
+            $( '#archivos-slides' ).val( '' );
+            return;
+        }
+
+        // Filtrar archivos que excedan el límite de tamaño por imagen
+        var candidatos = [];
+        var rechazados = [];
+        for ( let i = 0; i < archivos.length && candidatos.length < espacioDisponible; i++ ) {
+            if ( archivos[ i ].size > MAX_SLIDE_BYTES ) {
+                rechazados.push( archivos[ i ].name + ' (' + formatearBytes( archivos[ i ].size ) + ')' );
+            } else {
+                candidatos.push( archivos[ i ] );
+            }
+        }
+
+        if ( rechazados.length ) {
+            alert( 'Las siguientes imágenes superan el límite de 10 MB y no se cargaron:\n\n' + rechazados.join( '\n' ) );
+        }
+
+        $( '#archivos-slides' ).val( '' );
+
+        if ( ! candidatos.length ) return;
+
+        previewIndice = 0;
+        let cargados  = 0;
+        var max = candidatos.length;
 
         for ( let i = 0; i < max; i++ ) {
             const r = new FileReader();
-            const idx = i;
+            const idx = existentes + i;
+            const tamanio = candidatos[ i ].size;
             r.onload = e => {
-                previewSlides[ idx ] = e.target.result;
+                previewSlides[ idx ] = { src: e.target.result, tamanio: tamanio };
                 cargados++;
-                if ( cargados === max ) renderizarPreviewSlider( max );
+                if ( cargados === max ) {
+                    renderizarListaSlides( previewSlides.length );
+                }
             };
-            r.readAsDataURL( archivos[ i ] );
+            r.readAsDataURL( candidatos[ i ] );
         }
     }
 
-    function renderizarPreviewSlider( total ) {
-        const track = $( '#slides-track' ).empty();
-        const dots  = $( '#slides-dots'  ).empty();
+    function renderizarListaSlides( total ) {
+        const list = $( '#slides-list' ).empty();
 
-        previewSlides.forEach( ( src, i ) => {
-            track.append(
-                `<div class="slide-item${i === 0 ? ' activo' : ''}"
-                      style="background-image:url('${src}')"></div>`
-            );
-            dots.append(
-                `<span class="slide-dot${i === 0 ? ' activo' : ''}" data-i="${i}"></span>`
+        previewSlides.forEach( ( slide, i ) => {
+            var pesoTexto = slide.tamanio ? formatearBytes( slide.tamanio ) : '';
+            list.append(
+                `<div class="slide-list-item" data-idx="${i}">
+                    <div class="slide-drag-handle" title="Arrastrar para reordenar">☰</div>
+                    <div class="slide-list-thumb" style="background-image:url('${slide.src}')"></div>
+                    <div class="slide-list-info">
+                        <div>Imagen ${i + 1}</div>
+                        ${pesoTexto ? `<div class="slide-list-peso">${pesoTexto}</div>` : ''}
+                    </div>
+                    <button class="slide-list-delete" data-idx="${i}" title="Eliminar">🗑</button>
+                </div>`
             );
         });
+
+        // Drag & drop para reordenar
+        initSlideDragDrop();
 
         $( '#slides-preview-contador' ).text( `${total} imagen${total > 1 ? 'es' : ''} seleccionada${total > 1 ? 's' : ''}` );
         $( '#slides-preview-area' ).show();
         $( '#confirmar-presentacion' ).prop( 'disabled', false );
     }
 
-    function navegarPreviewSlide( dir ) {
-        const total = previewSlides.length;
-        if ( ! total ) return;
-        previewIndice = ( ( previewIndice + dir ) % total + total ) % total;
-        actualizarDotsSlide();
-        actualizarTrackSlide();
+    // ── Drag & drop nativo para lista de slides ──
+    function initSlideDragDrop() {
+        var list = document.getElementById('slides-list');
+        if (!list) return;
+        var dragItem = null;
+        var placeholder = document.createElement('div');
+        placeholder.className = 'slide-list-placeholder';
+
+        list.querySelectorAll('.slide-drag-handle').forEach(function(handle) {
+            handle.addEventListener('mousedown', startDrag);
+            handle.addEventListener('touchstart', startDragTouch, { passive: false });
+        });
+
+        function startDrag(e) {
+            dragItem = e.target.closest('.slide-list-item');
+            if (!dragItem) return;
+            dragItem.classList.add('dragging');
+            document.addEventListener('mousemove', onDrag);
+            document.addEventListener('mouseup', endDrag);
+            e.preventDefault();
+        }
+        function startDragTouch(e) {
+            dragItem = e.target.closest('.slide-list-item');
+            if (!dragItem) return;
+            dragItem.classList.add('dragging');
+            document.addEventListener('touchmove', onDragTouch, { passive: false });
+            document.addEventListener('touchend', endDragTouch);
+            e.preventDefault();
+        }
+        function onDrag(e) { moveDrag(e.clientY); }
+        function onDragTouch(e) {
+            if (e.touches.length) moveDrag(e.touches[0].clientY);
+            e.preventDefault();
+        }
+        function moveDrag(clientY) {
+            if (!dragItem) return;
+            var items = list.querySelectorAll('.slide-list-item:not(.dragging)');
+            var inserted = false;
+            items.forEach(function(item) {
+                var rect = item.getBoundingClientRect();
+                if (clientY < rect.top + rect.height / 2 && !inserted) {
+                    list.insertBefore(dragItem, item);
+                    inserted = true;
+                }
+            });
+            if (!inserted) list.appendChild(dragItem);
+        }
+        function endDrag() {
+            finishDrag();
+            document.removeEventListener('mousemove', onDrag);
+            document.removeEventListener('mouseup', endDrag);
+        }
+        function endDragTouch() {
+            finishDrag();
+            document.removeEventListener('touchmove', onDragTouch);
+            document.removeEventListener('touchend', endDragTouch);
+        }
+        function finishDrag() {
+            if (!dragItem) return;
+            dragItem.classList.remove('dragging');
+            // Reordenar previewSlides según el nuevo orden del DOM
+            var newOrder = [];
+            list.querySelectorAll('.slide-list-item').forEach(function(item) {
+                var idx = parseInt(item.dataset.idx);
+                newOrder.push(previewSlides[idx]);
+            });
+            previewSlides = newOrder;
+            // Actualizar índices
+            list.querySelectorAll('.slide-list-item').forEach(function(item, i) {
+                item.dataset.idx = i;
+                item.querySelector('.slide-list-info').textContent = 'Imagen ' + (i + 1);
+                item.querySelector('.slide-list-delete').dataset.idx = i;
+            });
+            dragItem = null;
+        }
     }
 
-    function actualizarTrackSlide() {
-        $( '#slides-track .slide-item' ).each( ( i, el ) => {
-            $( el ).toggleClass( 'activo', i === previewIndice );
-        });
-    }
-
-    function actualizarDotsSlide() {
-        $( '#slides-dots .slide-dot' ).each( ( i, el ) => {
-            $( el ).toggleClass( 'activo', i === previewIndice );
-        });
-    }
+    // Eliminar slide de la lista
+    $( document ).on( 'click', '.slide-list-delete', function () {
+        var idx = parseInt( $( this ).data( 'idx' ) );
+        previewSlides.splice( idx, 1 );
+        if ( previewSlides.length === 0 ) {
+            $( '#slides-preview-area' ).hide();
+            $( '#confirmar-presentacion' ).prop( 'disabled', true );
+        } else {
+            renderizarListaSlides( previewSlides.length );
+        }
+    });
 
     /* =========================================================
        PREVIEW AUDIO
@@ -862,14 +1377,40 @@
             cMapUrl:         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
             cMapPacked:      true,
         }).promise.then( pdf => {
-            estado.pdfDoc       = pdf;
-            estado.totalPaginas = pdf.numPages;
-            $( '#total-paginas' ).text( pdf.numPages );
-            $( '#input-pagina'  ).attr( 'max', pdf.numPages );
+            estado.pdfDoc = pdf;
+
+            // Construir pageMap: usar page_order si existe, sino reconstruir desde inserted/hidden
+            var pageOrder = contraplanoFlipbookAdmin.page_order || [];
+            if ( pageOrder.length > 0 ) {
+                estado.pageMap = pageOrder.slice();
+            } else {
+                estado.pageMap = [];
+                var hiddenPages = contraplanoFlipbookAdmin.hidden_pages || [];
+                for ( var pi = 1; pi <= pdf.numPages; pi++ ) {
+                    if ( hiddenPages.indexOf( pi ) === -1 ) {
+                        estado.pageMap.push({ type: 'pdf', num: pi });
+                    }
+                }
+                var insertedPages = contraplanoFlipbookAdmin.inserted_pages || [];
+                var inserts = insertedPages.slice().sort( function ( a, b ) {
+                    return ( b.pagina_flipbook || 0 ) - ( a.pagina_flipbook || 0 );
+                });
+                inserts.forEach( function ( ins ) {
+                    var idx = ( ins.pagina_flipbook || 1 ) - 1;
+                    if ( idx < 0 ) idx = 0;
+                    if ( idx > estado.pageMap.length ) idx = estado.pageMap.length;
+                    if ( ins.posicion === 'despues' ) idx++;
+                    estado.pageMap.splice( idx, 0, { type: 'inserted', url: ins.url } );
+                });
+            }
+
+            estado.totalPaginas = estado.pageMap.length;
+            $( '#total-paginas' ).text( estado.totalPaginas );
+            $( '#input-pagina'  ).attr( 'max', estado.totalPaginas );
             const infoActual = $( '#info-pdf' ).text();
             if ( infoActual && infoActual.includes( 'páginas' ) ) {
                 $( '#info-pdf' ).text(
-                    infoActual.replace( /\d+ páginas/, pdf.numPages + ' páginas' )
+                    infoActual.replace( /\d+ páginas/, estado.totalPaginas + ' páginas' )
                 );
             }
             renderizarPagina( 1 );
@@ -879,25 +1420,58 @@
         });
     }
 
+    // Referencia a sincronizarUINumeros (se asigna en el ready block)
+    var _sincronizarUINumeros = null;
+
     function renderizarPagina( num ) {
         if ( ! estado.pdfDoc ) return;
         num = Math.max( 1, Math.min( num, estado.totalPaginas ) );
         estado.paginaActual = num;
         $( '#input-pagina' ).val( num );
 
-        estado.pdfDoc.getPage( num ).then( pag => {
-            const vp = pag.getViewport({ scale: 1.5 });
-            const cv = document.getElementById( 'canvas-pdf' );
-            cv.width  = vp.width;
-            cv.height = vp.height;
-            $( '#contenedor-pagina' ).css({ width: vp.width + 'px', height: vp.height + 'px' });
-            pag.render({ canvasContext: cv.getContext( '2d' ), viewport: vp })
-               .promise.then( () => {
-                   // Dibujar número de página sobre el canvas antes de los overlays
-                   dibujarNumeroPagina( cv, num, estado.totalPaginas );
-                   renderizarOverlays();
-               });
-        });
+        // Actualizar UI de números según la página actual
+        if ( _sincronizarUINumeros ) _sincronizarUINumeros();
+
+        var entry = estado.pageMap[ num - 1 ];
+        if ( ! entry ) entry = { type: 'pdf', num: num };
+
+        if ( entry.type === 'inserted' ) {
+            // Página insertada: mostrar imagen en el canvas
+            var img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = function () {
+                var cv = document.getElementById( 'canvas-pdf' );
+                var alturaDisponible = window.innerHeight - 160;
+                var escala = Math.min( 1.5, alturaDisponible / img.naturalHeight );
+                var w = Math.round( img.naturalWidth * escala );
+                var h = Math.round( img.naturalHeight * escala );
+                cv.width = w;
+                cv.height = h;
+                $( '#contenedor-pagina' ).css({ width: w + 'px', height: h + 'px' });
+                var ctx = cv.getContext( '2d' );
+                ctx.drawImage( img, 0, 0, w, h );
+                dibujarNumeroPagina( cv, num, estado.totalPaginas );
+                renderizarOverlays();
+            };
+            img.src = entry.url;
+        } else {
+            // Página del PDF
+            estado.pdfDoc.getPage( entry.num ).then( pag => {
+                const alturaDisponible = window.innerHeight - 160;
+                const vpBase = pag.getViewport({ scale: 1 });
+                const escala = Math.min( 1.5, alturaDisponible / vpBase.height );
+                const vp = pag.getViewport({ scale: escala });
+                const cv = document.getElementById( 'canvas-pdf' );
+                cv.width  = vp.width;
+                cv.height = vp.height;
+                $( '#contenedor-pagina' ).css({ width: vp.width + 'px', height: vp.height + 'px' });
+                pag.render({ canvasContext: cv.getContext( '2d' ), viewport: vp })
+                   .promise.then( () => {
+                       dibujarNumeroPagina( cv, num, estado.totalPaginas );
+                       renderizarOverlays();
+                   });
+            });
+        }
     }
 
     /**
@@ -907,13 +1481,17 @@
     function dibujarNumeroPagina( canvas, paginaActual, totalPaginas ) {
         if ( ! configNumerosPage.mostrar ) return;
 
+        // Merge global config with per-page override
+        var pp = configNumerosPage.porPagina ? configNumerosPage.porPagina[ paginaActual ] : null;
+        var cfg = pp ? Object.assign( {}, configNumerosPage, pp ) : configNumerosPage;
+
         const ctx      = canvas.getContext( '2d' );
-        const padding  = 15;
-        const fontSize = Math.max( configNumerosPage.tamanio, canvas.width * 0.015 );
-        const texto    = `${paginaActual} / ${totalPaginas}`;
+        const padding  = 5;
+        const fontSize = cfg.tamanio || 14;
+        const texto    = `${paginaActual}`;
 
         ctx.font          = `bold ${fontSize}px Arial, sans-serif`;
-        ctx.fillStyle     = configNumerosPage.colorNumero;
+        ctx.fillStyle     = cfg.colorNumero;
         ctx.textBaseline  = 'bottom';
 
         const metrics    = ctx.measureText( texto );
@@ -921,7 +1499,7 @@
         const textHeight = fontSize + 4;
 
         let x, y;
-        const pos = configNumerosPage.posicion;
+        const pos = cfg.posicion || 'inferior-centro';
 
         if      ( pos === 'inferior-derecha'   ) { ctx.textAlign = 'right';  x = canvas.width - padding;  y = canvas.height - padding; }
         else if ( pos === 'inferior-izquierda' ) { ctx.textAlign = 'left';   x = padding;                 y = canvas.height - padding; }
@@ -929,6 +1507,11 @@
         else if ( pos === 'superior-derecha'   ) { ctx.textAlign = 'right';  x = canvas.width - padding;  y = padding + fontSize; }
         else if ( pos === 'superior-izquierda' ) { ctx.textAlign = 'left';   x = padding;                 y = padding + fontSize; }
         else if ( pos === 'superior-centro'    ) { ctx.textAlign = 'center'; x = canvas.width / 2;        y = padding + fontSize; }
+        else if ( pos === 'personalizada'      ) {
+            ctx.textAlign = 'center';
+            x = ( cfg.customX || 50 ) / 100 * canvas.width;
+            y = ( cfg.customY || 95 ) / 100 * canvas.height;
+        }
         else if ( pos === 'centro'             ) { ctx.textAlign = 'center'; x = canvas.width / 2;        y = ( canvas.height / 2 ) + ( fontSize / 2 ); }
 
         const bgW = textWidth + 8, bgH = textHeight + 4;
@@ -940,15 +1523,18 @@
         else if ( pos === 'superior-derecha'   ) { bgX = canvas.width - textWidth - padding - 4; bgY = padding - 4; }
         else if ( pos === 'superior-izquierda' ) { bgX = padding - 4;                            bgY = padding - 4; }
         else if ( pos === 'superior-centro'    ) { bgX = ( canvas.width / 2 ) - ( bgW / 2 );     bgY = padding - 4; }
+        else if ( pos === 'personalizada'      ) { bgX = x - bgW / 2;                            bgY = y - bgH; }
         else if ( pos === 'centro'             ) { bgX = ( canvas.width / 2 ) - ( bgW / 2 );     bgY = ( canvas.height / 2 ) - ( bgH / 2 ); }
 
-        // Fondo semi-transparente
-        const rgb = hexARgb( configNumerosPage.colorFondo );
-        ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${configNumerosPage.opacidadFondo})`;
-        ctx.fillRect( bgX, bgY, bgW, bgH );
+        // Fondo semi-transparente (solo si mostrarFondo no es false)
+        if ( cfg.mostrarFondo !== false ) {
+            const rgb = hexARgb( cfg.colorFondo || '#00FFFF' );
+            ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${cfg.opacidadFondo != null ? cfg.opacidadFondo : 1})`;
+            ctx.fillRect( bgX, bgY, bgW, bgH );
+        }
 
         // Texto del número
-        ctx.fillStyle = configNumerosPage.colorNumero;
+        ctx.fillStyle = cfg.colorNumero || '#666666';
         ctx.fillText( texto, x, y );
     }
 
@@ -1028,10 +1614,12 @@
             case 'audio': {
                 const url = escaparHtml( ov.datos.url || '' );
                 const iconColor = escaparHtml( ov.datos.iconColor || '#ffffff' );
+                // Mismo ícono de parlante que usa el viewer público
+                const speakerPath = 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8.5v7a4.47 4.47 0 002.5-3.5zM14 3.23v2.06a7.007 7.007 0 010 13.42v2.06A9.013 9.013 0 0023 12 9.013 9.013 0 0014 3.23z';
                 inner = `<div class="ov-audio-container">
-                    <div class="ov-audio-btn" style="background:transparent;border:1px solid rgba(255,255,255,.45);">
-                        <svg viewBox="0 0 24 24" fill="${iconColor}" width="55%" height="55%">
-                            <path d="M8 5v14l11-7z"/>
+                    <div class="ov-audio-btn" style="background:transparent;border:none;">
+                        <svg viewBox="0 0 24 24" fill="${iconColor}" width="100%" height="100%">
+                            <path d="${speakerPath}"/>
                         </svg>
                     </div>
                     ${url ? `<audio class="ov-audio-el" src="${url}" preload="none"></audio>` : ''}
@@ -1052,14 +1640,21 @@
                     carrito:   '<svg viewBox="0 0 24 24" fill="currentColor" width="60%" height="60%"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96C5 16.1 6.1 17 7 17h11v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63H19c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1 1 0 0023.25 4H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>',
                 };
 
-                const tieneIcono = d.icono && d.icono !== 'ninguno' && svgIconos[ d.icono ];
+                const esInvisible = d.icono === 'invisible';
+                const tieneIcono  = d.icono && d.icono !== 'ninguno' && !esInvisible && svgIconos[ d.icono ];
 
-                inner = `<div class="ov-link-container" style="border-color:${color};" title="${escaparHtml(etiqueta)}">
-                    ${tieneIcono
-                        ? `<div class="ov-link-icono" style="color:${color};">${svgIconos[d.icono]}</div>`
-                        : `<div class="ov-link-label" style="color:${color};">🔗 ${escaparHtml(etiqueta.substring(0,20))}</div>`
-                    }
-                </div>`;
+                if ( esInvisible ) {
+                    inner = `<div class="ov-link-container ov-link-invisible" style="border:2px dashed #888;background:rgba(180,180,180,.12);display:flex;align-items:center;justify-content:center;" title="${escaparHtml(etiqueta)} (invisible en el visor)">
+                        <div class="ov-link-label" style="color:#666;font-size:11px;opacity:.75;">👁‍🗨 Invisible</div>
+                    </div>`;
+                } else {
+                    inner = `<div class="ov-link-container" style="border-color:${color};" title="${escaparHtml(etiqueta)}">
+                        ${tieneIcono
+                            ? `<div class="ov-link-icono" style="color:${color};">${svgIconos[d.icono]}</div>`
+                            : `<div class="ov-link-label" style="color:${color};">🔗 ${escaparHtml(etiqueta.substring(0,20))}</div>`
+                        }
+                    </div>`;
+                }
                 break;
             }
         }
@@ -1077,10 +1672,11 @@
     function vincularEventosOverlay() {
 
         // Reproducir/pausar audio del overlay en el editor
+        // Usa los mismos iconos del viewer: parlante (parado) / dos barras (reproduciendo)
         $( '.ov-audio-btn' ).on( 'click', function ( e ) {
             e.stopPropagation();
-            const playPath  = 'M8 5v14l11-7z';
-            const pausePath = 'M7 5h3v14H7zm7 0h3v14h-3z';
+            const playPath  = 'M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8.5v7a4.47 4.47 0 002.5-3.5zM14 3.23v2.06a7.007 7.007 0 010 13.42v2.06A9.013 9.013 0 0023 12 9.013 9.013 0 0014 3.23z';
+            const pausePath = 'M6 5h4v14H6zM14 5h4v14h-4z';
             const pathEl    = $( this ).find( 'path' )[0];
             const ae = $( this ).closest( '.ov-audio-container' ).find( '.ov-audio-el' )[0];
             if ( ! ae ) return;
@@ -1191,6 +1787,14 @@
         const ov = obtenerOverlay( tempId );
         if ( ov ) actualizarPanelPosicion( ov );
         $( '#panel-posicion' ).show();
+
+        // Mostrar/ocultar opciones según el tipo de overlay
+        $( '#panel-audio-opciones' ).toggle( ov && ov.tipo === 'audio' );
+        $( '#panel-presentacion-opciones' ).toggle( ov && ov.tipo === 'presentacion' );
+
+        if ( ov && ov.tipo === 'audio' ) {
+            $( '#ov-audio-autoplay' ).prop( 'checked', !!( ov.datos && ov.datos.autoplay ) );
+        }
     }
 
     function actualizarPanelPosicion( ov ) {
@@ -1204,10 +1808,15 @@
         if ( ! estado.seleccionado ) return;
         const ov = obtenerOverlay( estado.seleccionado );
         if ( ! ov ) return;
-        ov.left  = parseFloat( $( '#pos-left'  ).val() ) || ov.left;
-        ov.top   = parseFloat( $( '#pos-top'   ).val() ) || ov.top;
-        ov.ancho = parseFloat( $( '#pos-ancho' ).val() ) || ov.ancho;
-        ov.alto  = parseFloat( $( '#pos-alto'  ).val() ) || ov.alto;
+        // No usar `|| ov.xxx` porque 0 es falsy y se rechazaría.
+        const pl = parseFloat( $( '#pos-left'  ).val() );
+        const pt = parseFloat( $( '#pos-top'   ).val() );
+        const pw = parseFloat( $( '#pos-ancho' ).val() );
+        const ph = parseFloat( $( '#pos-alto'  ).val() );
+        if ( ! isNaN( pl ) ) ov.left  = pl;
+        if ( ! isNaN( pt ) ) ov.top   = pt;
+        if ( ! isNaN( pw ) && pw > 0 ) ov.ancho = pw;
+        if ( ! isNaN( ph ) && ph > 0 ) ov.alto  = ph;
         renderizarOverlays();
     }
 
@@ -1254,8 +1863,8 @@
             $( '#audio-zona-texto' ).text( '⬆ Haz clic para seleccionar audio (mp3, wav, ogg)' );
             $( '#confirmar-audio' ).prop( 'disabled', true );
             $( '#audio-play-btn' ).text( '▶' ).removeClass( 'pausando' );
-            $( '#audio-icon-color' ).val( '#ffffff' );
-            $( '#audio-icon-color-hex' ).text( '#ffffff' );
+            $( '#audio-icon-color' ).val( '#C70000' );
+            $( '#audio-icon-color-hex' ).text( '#C70000' );
             const ae = document.getElementById( 'audio-el-preview' );
             if ( ae ) { ae.pause(); ae.src = ''; }
         }
@@ -1272,10 +1881,18 @@
         if ( tipo === 'presentacion' ) {
             $( '#archivos-slides' ).val( '' );
             $( '#slides-preview-area' ).hide();
-            $( '#slides-track' ).empty();
-            $( '#slides-dots'  ).empty();
-            $( '#confirmar-presentacion' ).prop( 'disabled', true );
+            $( '#slides-list' ).empty();
+            $( '#confirmar-presentacion' ).prop( 'disabled', true ).removeData( 'editando' );
             previewSlides = []; previewIndice = 0;
+        }
+        if ( tipo === 'pagina' ) {
+            $( '#archivo-pdf-insertar' ).val( '' );
+            $( '#insertar-opciones' ).hide();
+            $( '#pdf-insertar-texto' ).text( 'Selecciona un archivo PDF. Tamaño máximo permitido: 512 MB.' );
+            $( '#confirmar-insertar-pagina' ).prop( 'disabled', true ).text( 'De acuerdo' );
+            $( '#insertar-pagina-pdf' ).empty();
+            $( '#insertar-pagina-flipbook' ).empty();
+            _insertarPdfDoc = null;
         }
 
         $( '#fondo-modal' ).show();
@@ -1314,83 +1931,200 @@
         const f = $( '#archivo-imagen' )[0].files[0];
         if ( ! f ) { alert( 'Selecciona una imagen.' ); return; }
 
-        const fd = new FormData();
-        fd.append( 'action', 'flipbook_subir_imagen' );
-        fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
-        fd.append( 'imagen', f );
+        $( '#confirmar-imagen' ).text( 'Comprimiendo…' ).prop( 'disabled', true );
 
-        $( '#confirmar-imagen' ).text( 'Subiendo…' ).prop( 'disabled', true );
-        $.ajax({
-            url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
-            data: fd, processData: false, contentType: false,
-            success( r ) {
-                $( '#confirmar-imagen' ).text( 'De acuerdo' ).prop( 'disabled', false );
-                if ( r.success ) {
-                    agregarOverlay( 'imagen', { url: r.data.url, attachment_id: r.data.attachment_id }, 10, 10, 30, 25 );
-                    cerrarTodosLosModales();
-                } else { alert( 'Error al subir: ' + r.data ); }
-            }
+        // Comprimir en el cliente antes de subir. Si el módulo no está cargado o la
+        // compresión falla, comprimirImagen devuelve el archivo original → upload normal.
+        var comprimir = (window.ContraplanoCompresion && window.ContraplanoCompresion.comprimirImagen)
+            ? window.ContraplanoCompresion.comprimirImagen(f)
+            : Promise.resolve(f);
+
+        comprimir.then(function (fileFinal) {
+            const fd = new FormData();
+            fd.append( 'action', 'flipbook_subir_imagen' );
+            fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
+            fd.append( 'imagen', fileFinal, fileFinal.name || f.name );
+
+            $( '#confirmar-imagen' ).text( 'Subiendo…' );
+            $.ajax({
+                url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
+                data: fd, processData: false, contentType: false,
+                success( r ) {
+                    $( '#confirmar-imagen' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                    if ( r.success ) {
+                        agregarOverlay( 'imagen', { url: r.data.url, attachment_id: r.data.attachment_id }, 10, 10, 30, 25 );
+                        cerrarTodosLosModales();
+                    } else { alert( 'Error al subir: ' + r.data ); }
+                },
+                error() {
+                    $( '#confirmar-imagen' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                    alert( 'Error de red al subir la imagen.' );
+                }
+            });
         });
     }
 
     function confirmarPresentacion() {
-        const archivos = $( '#archivos-slides' )[0].files;
-        if ( ! archivos || ! archivos.length ) { alert( 'Selecciona imágenes.' ); return; }
+        if ( ! previewSlides || ! previewSlides.length ) { alert( 'Selecciona imágenes.' ); return; }
 
-        const max = Math.min( archivos.length, 10 );
-        const promesas = [];
+        var editandoId = $( '#confirmar-presentacion' ).data( 'editando' ) || null;
+        const max = Math.min( previewSlides.length, 10 );
         $( '#confirmar-presentacion' ).text( 'Subiendo…' ).prop( 'disabled', true );
 
-        for ( let i = 0; i < max; i++ ) {
-            const fd = new FormData();
-            fd.append( 'action', 'flipbook_subir_imagen' );
-            fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
-            fd.append( 'imagen', archivos[i] );
-            promesas.push( $.ajax({ url: contraplanoFlipbookAdmin.ajax_url, method: 'POST', data: fd, processData: false, contentType: false }) );
+        function dataUrlToBlob( dataUrl ) {
+            var parts = dataUrl.split( ',' );
+            var mime = parts[0].match( /:(.*?);/ )[1];
+            var b64 = atob( parts[1] );
+            var arr = new Uint8Array( b64.length );
+            for ( var i = 0; i < b64.length; i++ ) arr[i] = b64.charCodeAt(i);
+            return new Blob( [arr], { type: mime } );
         }
 
-        Promise.all( promesas ).then( rs => {
-            $( '#confirmar-presentacion' ).text( 'De acuerdo' ).prop( 'disabled', false );
-            const urls = rs.filter( r => r.success ).map( r => r.data.url );
-            if ( ! urls.length ) { alert( 'No se pudieron subir las imágenes.' ); return; }
+        // Sube una sola imagen con XHR nativo. Se evita $.ajax porque algunos
+        // plugins de terceros enganchan ajaxSend y asumen que settings.data es
+        // un string (llamando settings.data.split), lo que rompe envíos con FormData.
+        function subirImagenNativo( blob, nombre ) {
+            return new Promise( function ( resolve, reject ) {
+                var fd = new FormData();
+                fd.append( 'action', 'flipbook_subir_imagen' );
+                fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
+                fd.append( 'imagen', blob, nombre );
+                var xhr = new XMLHttpRequest();
+                xhr.open( 'POST', contraplanoFlipbookAdmin.ajax_url, true );
+                xhr.onload = function () {
+                    if ( xhr.status < 200 || xhr.status >= 300 ) {
+                        reject( new Error( 'HTTP ' + xhr.status ) );
+                        return;
+                    }
+                    try {
+                        var r = JSON.parse( xhr.responseText );
+                        if ( r && r.success && r.data && r.data.url ) {
+                            resolve( r.data.url );
+                        } else {
+                            reject( new Error( ( r && r.data ) ? r.data : 'Respuesta inválida del servidor' ) );
+                        }
+                    } catch ( e ) {
+                        reject( new Error( 'Respuesta no es JSON: ' + xhr.responseText.substring( 0, 120 ) ) );
+                    }
+                };
+                xhr.onerror = function () { reject( new Error( 'Error de red' ) ); };
+                xhr.send( fd );
+            });
+        }
 
-            agregarOverlay( 'presentacion', {
-                imagenes:   urls,
+        // Subir secuencialmente para evitar choques con interceptores ajaxSend
+        // de otros plugins y facilitar el diagnóstico si alguna falla.
+        var urls = new Array( max );
+
+        // Helper: comprimir si el módulo está disponible.
+        function comprimirSiPosible( blobOFile ) {
+            if ( window.ContraplanoCompresion && window.ContraplanoCompresion.comprimirImagen ) {
+                // comprimirImagen espera un File con .name; creamos uno si es Blob puro.
+                var f = blobOFile;
+                if ( ! ( f instanceof File ) ) {
+                    try { f = new File( [ blobOFile ], 'slide.jpg', { type: blobOFile.type || 'image/jpeg' } ); }
+                    catch ( e ) { f = blobOFile; }
+                }
+                return window.ContraplanoCompresion.comprimirImagen( f );
+            }
+            return Promise.resolve( blobOFile );
+        }
+
+        (async function () {
+            for ( let i = 0; i < max; i++ ) {
+                var src = previewSlides[ i ].src;
+                if ( src.startsWith( 'data:' ) ) {
+                    try {
+                        $( '#confirmar-presentacion' ).text( 'Comprimiendo ' + (i+1) + '/' + max + '…' );
+                        var blobOriginal = dataUrlToBlob( src );
+                        var fileComprimido = await comprimirSiPosible( blobOriginal );
+                        $( '#confirmar-presentacion' ).text( 'Subiendo ' + (i+1) + '/' + max + '…' );
+                        urls[ i ] = await subirImagenNativo( fileComprimido, 'slide_' + i + '.jpg' );
+                    } catch ( err ) {
+                        $( '#confirmar-presentacion' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                        alert( 'Error al subir la imagen ' + ( i + 1 ) + ': ' + err.message );
+                        return;
+                    }
+                } else {
+                    urls[ i ] = src;
+                }
+            }
+
+            $( '#confirmar-presentacion' ).text( 'De acuerdo' ).prop( 'disabled', false );
+
+            var urlsFinales = urls.filter( Boolean );
+            if ( ! urlsFinales.length ) { alert( 'No se pudieron subir las imágenes.' ); return; }
+
+            var datos = {
+                imagenes:   urlsFinales,
                 autoplay:   $( '#slide-autoplay'  ).is( ':checked' ),
                 loop:       $( '#slide-loop'       ).is( ':checked' ),
                 aleatorio:  $( '#slide-aleatorio'  ).is( ':checked' ),
                 flechas:    $( '#slide-flechas'    ).is( ':checked' ),
                 duracion:   parseInt( $( '#slide-duracion' ).val() ),
                 transicion: $( '#slide-transicion' ).val(),
-            }, 10, 10, 35, 28 );
+            };
+
+            if ( editandoId ) {
+                var ov = obtenerOverlay( editandoId );
+                if ( ov ) {
+                    ov.datos = datos;
+                    renderizarOverlays();
+                    seleccionarOverlay( editandoId );
+                }
+                $( '#confirmar-presentacion' ).removeData( 'editando' );
+            } else {
+                agregarOverlay( 'presentacion', datos, 10, 10, 35, 28 );
+            }
+
             cerrarTodosLosModales();
-        });
+        })();
     }
 
     function confirmarAudio() {
         const f = $( '#archivo-audio' )[0].files[0];
         if ( ! f ) { alert( 'Selecciona un archivo de audio.' ); return; }
 
-        const fd = new FormData();
-        fd.append( 'action', 'flipbook_subir_audio' );
-        fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
-        fd.append( 'audio',  f );
+        $( '#confirmar-audio' ).text( 'Comprimiendo…' ).prop( 'disabled', true );
 
-        $( '#confirmar-audio' ).text( 'Subiendo…' ).prop( 'disabled', true );
-        $.ajax({
-            url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
-            data: fd, processData: false, contentType: false,
-            success( r ) {
-                $( '#confirmar-audio' ).text( 'De acuerdo' ).prop( 'disabled', false );
-                if ( r.success ) {
-                    agregarOverlay( 'audio', {
-                        url:      r.data.url,
-                        autoplay: $( '#audio-autoplay' ).is( ':checked' ),
-                        iconColor: $( '#audio-icon-color' ).val() || '#ffffff',
-                    }, 5, 5, 8, 9 );
-                    cerrarTodosLosModales();
-                } else { alert( 'Error al subir el audio: ' + r.data ); }
-            }
+        // Comprimir audio con lamejs (MP3 mono 64 kbps) antes de subir.
+        // La compresión de audio puede tardar unos segundos — por eso actualizamos el
+        // botón. Si lamejs no está cargado o el archivo ya está bien optimizado, se
+        // sube tal cual.
+        var comprimir = (window.ContraplanoCompresion && window.ContraplanoCompresion.comprimirAudio)
+            ? window.ContraplanoCompresion.comprimirAudio(f)
+            : Promise.resolve(f);
+
+        comprimir.then(function (fileFinal) {
+            const fd = new FormData();
+            fd.append( 'action', 'flipbook_subir_audio' );
+            fd.append( 'nonce',  contraplanoFlipbookAdmin.nonce );
+            fd.append( 'audio',  fileFinal, fileFinal.name || f.name );
+
+            $( '#confirmar-audio' ).text( 'Subiendo…' );
+            $.ajax({
+                url: contraplanoFlipbookAdmin.ajax_url, method: 'POST',
+                data: fd, processData: false, contentType: false,
+                success( r ) {
+                    $( '#confirmar-audio' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                    if ( r.success ) {
+                        var audioW = 11;
+                        var audioH = 4.1;
+                        var audioLeft = (100 - audioW) / 2;
+                        var audioTop  = 0;
+                        agregarOverlay( 'audio', {
+                            url:      r.data.url,
+                            autoplay: $( '#audio-autoplay' ).is( ':checked' ),
+                            iconColor: $( '#audio-icon-color' ).val() || '#C70000',
+                        }, audioLeft, audioTop, audioW, audioH );
+                        cerrarTodosLosModales();
+                    } else { alert( 'Error al subir el audio: ' + r.data ); }
+                },
+                error() {
+                    $( '#confirmar-audio' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                    alert( 'Error de red al subir el audio.' );
+                }
+            });
         });
     }
 
@@ -1440,6 +2174,211 @@
         cerrarTodosLosModales();
     }
 
+    function confirmarInsertarPagina() {
+        if ( ! _insertarPdfDoc ) { alert( 'Carga un archivo PDF primero.' ); return; }
+        if ( ! estado.flipbookId ) { alert( 'Primero guarda el flipbook.' ); return; }
+
+        var numPaginaPdf = parseInt( $( '#insertar-pagina-pdf' ).val() );
+        var posicion = $( 'input[name="insertar-posicion"]:checked' ).val();
+        var numPaginaFlipbook = parseInt( $( '#insertar-pagina-flipbook' ).val() );
+
+        $( '#confirmar-insertar-pagina' ).text( 'Procesando…' ).prop( 'disabled', true );
+
+        // Renderizar la página del nuevo PDF a canvas → blob
+        _insertarPdfDoc.getPage( numPaginaPdf ).then( function ( page ) {
+            var vp = page.getViewport({ scale: 2.0 });
+            var canvas = document.createElement( 'canvas' );
+            canvas.width = vp.width;
+            canvas.height = vp.height;
+            return page.render({ canvasContext: canvas.getContext( '2d' ), viewport: vp }).promise.then( function () {
+                return new Promise( function ( resolve ) {
+                    canvas.toBlob( function ( blob ) { resolve( blob ); }, 'image/jpeg', 0.92 );
+                });
+            });
+        }).then( function ( blob ) {
+            // Calcular idx (posición en el pageMap actual)
+            var idx = numPaginaFlipbook - 1;
+            if ( idx < 0 ) idx = 0;
+            if ( idx > estado.pageMap.length ) idx = estado.pageMap.length;
+            if ( posicion === 'despues' ) idx++;
+
+            // Subir imagen y registrar inserción
+            var fd = new FormData();
+            fd.append( 'action', 'flipbook_insertar_pagina' );
+            fd.append( 'nonce', contraplanoFlipbookAdmin.nonce );
+            fd.append( 'flipbook_id', estado.flipbookId );
+            fd.append( 'imagen', blob, 'pagina_insertada.jpg' );
+            fd.append( 'posicion', posicion );
+            fd.append( 'pagina_flipbook', numPaginaFlipbook );
+
+            return $.ajax({
+                url: contraplanoFlipbookAdmin.ajax_url,
+                method: 'POST',
+                data: fd,
+                processData: false,
+                contentType: false,
+            }).then( function ( r ) { return { r: r, idx: idx }; });
+        }).then( function ( result ) {
+            var r = result.r;
+            var idx = result.idx;
+            $( '#confirmar-insertar-pagina' ).text( 'De acuerdo' ).prop( 'disabled', false );
+            if ( r.success ) {
+                // Insertar en el pageMap del editor sin recargar
+                estado.pageMap.splice( idx, 0, { type: 'inserted', url: r.data.url } );
+                estado.totalPaginas = estado.pageMap.length;
+                $( '#total-paginas' ).text( estado.totalPaginas );
+                $( '#input-pagina' ).attr( 'max', estado.totalPaginas );
+
+                // Desplazar overlays de páginas afectadas (misma lógica que el servidor)
+                var desdePagina = idx + 1; // 1-based
+                estado.overlays.forEach( function ( ov ) {
+                    if ( ov.pagina >= desdePagina ) ov.pagina++;
+                });
+
+                // Desplazar config de números por página (porPagina)
+                var ppNuevo = {};
+                Object.keys( configNumerosPage.porPagina || {} ).forEach( function ( k ) {
+                    var p = parseInt( k );
+                    if ( p >= desdePagina ) ppNuevo[ p + 1 ] = configNumerosPage.porPagina[ k ];
+                    else ppNuevo[ p ] = configNumerosPage.porPagina[ k ];
+                });
+                configNumerosPage.porPagina = ppNuevo;
+
+                // Actualizar page_order local (fuente de verdad)
+                contraplanoFlipbookAdmin.page_order = estado.pageMap.slice();
+
+                cerrarTodosLosModales();
+                // Navegar a la página insertada
+                renderizarPagina( idx + 1 );
+            } else {
+                alert( 'Error: ' + ( r.data || 'No se pudo insertar la página.' ) );
+            }
+        }).catch( function ( err ) {
+            $( '#confirmar-insertar-pagina' ).text( 'De acuerdo' ).prop( 'disabled', false );
+            alert( 'Error al procesar la página: ' + ( err.message || err ) );
+        });
+    }
+
+    /* =========================================================
+       MOVER PÁGINA
+    ========================================================= */
+    function confirmarMoverPagina() {
+        if ( ! estado.flipbookId ) return;
+
+        var srcPage = estado.paginaActual; // 1-based
+        var posicion = $( 'input[name="mover-posicion"]:checked' ).val();
+        var destPage = parseInt( $( '#mover-pagina-flipbook' ).val() );
+
+        // Calcular destIdx en el pageMap actual
+        var srcIdx = srcPage - 1;
+        var rawDestIdx = destPage - 1;
+        if ( posicion === 'despues' ) rawDestIdx++;
+        var adjDestIdx = rawDestIdx;
+        if ( rawDestIdx > srcIdx ) adjDestIdx--;
+
+        if ( adjDestIdx === srcIdx ) {
+            alert( 'La página ya está en esa posición.' );
+            return;
+        }
+
+        $( '#confirmar-mover-pagina' ).text( 'Procesando…' ).prop( 'disabled', true );
+
+        var entry = estado.pageMap[ srcIdx ];
+
+        // Función que envía el AJAX después de tener la imagen (si es PDF)
+        function enviarMover( blob ) {
+            var fd = new FormData();
+            fd.append( 'action', 'flipbook_mover_pagina' );
+            fd.append( 'nonce', contraplanoFlipbookAdmin.nonce );
+            fd.append( 'flipbook_id', estado.flipbookId );
+            fd.append( 'src_page', srcPage );
+            fd.append( 'dest_page', destPage );
+            fd.append( 'posicion', posicion );
+            if ( blob ) fd.append( 'imagen', blob, 'pagina_movida.jpg' );
+
+            $.ajax({
+                url: contraplanoFlipbookAdmin.ajax_url,
+                method: 'POST',
+                data: fd,
+                processData: false,
+                contentType: false,
+            }).then( function ( r ) {
+                $( '#confirmar-mover-pagina' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                if ( ! r.success ) { alert( 'Error: ' + ( r.data || 'No se pudo mover.' ) ); return; }
+
+                var newPage = r.data.nueva_pagina; // 1-based
+
+                // Actualizar overlays locales
+                estado.overlays.forEach( function ( ov ) {
+                    if ( ov.pagina === srcPage ) {
+                        ov.pagina = newPage;
+                    } else if ( srcPage < newPage && ov.pagina > srcPage && ov.pagina <= newPage ) {
+                        ov.pagina--;
+                    } else if ( srcPage > newPage && ov.pagina >= newPage && ov.pagina < srcPage ) {
+                        ov.pagina++;
+                    }
+                });
+
+                // Actualizar porPagina config
+                var pp = configNumerosPage.porPagina || {};
+                var ppNuevo = {};
+                Object.keys( pp ).forEach( function ( k ) {
+                    var p = parseInt( k );
+                    if ( p === srcPage ) {
+                        ppNuevo[ newPage ] = pp[ k ];
+                    } else if ( srcPage < newPage && p > srcPage && p <= newPage ) {
+                        ppNuevo[ p - 1 ] = pp[ k ];
+                    } else if ( srcPage > newPage && p >= newPage && p < srcPage ) {
+                        ppNuevo[ p + 1 ] = pp[ k ];
+                    } else {
+                        ppNuevo[ p ] = pp[ k ];
+                    }
+                });
+                configNumerosPage.porPagina = ppNuevo;
+
+                // Actualizar pageMap local
+                var movedEntry = estado.pageMap.splice( srcIdx, 1 )[0];
+                // Si era PDF, ahora es inserted con la URL devuelta por el servidor
+                if ( movedEntry.type === 'pdf' && r.data.url ) {
+                    movedEntry = { type: 'inserted', url: r.data.url };
+                }
+                estado.pageMap.splice( adjDestIdx, 0, movedEntry );
+
+                // Actualizar page_order local
+                contraplanoFlipbookAdmin.page_order = estado.pageMap.slice();
+
+                cerrarTodosLosModales();
+                renderizarPagina( newPage );
+            }).catch( function ( err ) {
+                $( '#confirmar-mover-pagina' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                alert( 'Error al mover la página: ' + ( err.message || err ) );
+            });
+        }
+
+        if ( entry.type === 'pdf' ) {
+            // Renderizar la página PDF a imagen antes de mover
+            estado.pdfDoc.getPage( entry.num ).then( function ( page ) {
+                var vp = page.getViewport({ scale: 2.0 });
+                var canvas = document.createElement( 'canvas' );
+                canvas.width = vp.width;
+                canvas.height = vp.height;
+                return page.render({ canvasContext: canvas.getContext( '2d' ), viewport: vp }).promise.then( function () {
+                    return new Promise( function ( resolve ) {
+                        canvas.toBlob( function ( b ) { resolve( b ); }, 'image/jpeg', 0.92 );
+                    });
+                });
+            }).then( function ( blob ) {
+                enviarMover( blob );
+            }).catch( function ( err ) {
+                $( '#confirmar-mover-pagina' ).text( 'De acuerdo' ).prop( 'disabled', false );
+                alert( 'Error al procesar la página: ' + ( err.message || err ) );
+            });
+        } else {
+            // Página insertada: ya tiene URL, no necesita imagen
+            enviarMover( null );
+        }
+    }
+
     /* =========================================================
        OVERLAYS ARRAY
     ========================================================= */
@@ -1486,11 +2425,21 @@
         }, function ( r ) {
             if ( r.success && r.data ) {
                 configNumerosPage.colorNumero   = r.data.colorNumero   || '#666666';
-                configNumerosPage.colorFondo    = r.data.colorFondo    || '#FFFFFF';
-                configNumerosPage.opacidadFondo = r.data.opacidadFondo || 0.8;
-                configNumerosPage.posicion      = r.data.posicion      || 'inferior-derecha';
+                configNumerosPage.colorFondo    = r.data.colorFondo    || '#00FFFF';
+                configNumerosPage.opacidadFondo = r.data.opacidadFondo != null ? r.data.opacidadFondo : 1;
+                configNumerosPage.mostrarFondo  = r.data.mostrarFondo !== false;
+                configNumerosPage.posicion      = r.data.posicion      || 'inferior-centro';
                 configNumerosPage.tamanio       = r.data.tamanio       || 14;
                 configNumerosPage.mostrar       = r.data.mostrar !== false;
+                configNumerosPage.customX       = r.data.customX       || 50;
+                configNumerosPage.customY       = r.data.customY       || 95;
+                configNumerosPage.porPagina     = r.data.porPagina     || {};
+
+                // Actualizar snapshot de globales originales
+                _globalOriginal.colorNumero   = configNumerosPage.colorNumero;
+                _globalOriginal.colorFondo    = configNumerosPage.colorFondo;
+                _globalOriginal.opacidadFondo = configNumerosPage.opacidadFondo;
+                _globalOriginal.mostrarFondo  = configNumerosPage.mostrarFondo;
 
                 // Sincronizar controles del sidebar con los valores cargados
                 $( '#cfg-mostrar-numeros' ).prop( 'checked', configNumerosPage.mostrar );
@@ -1500,9 +2449,14 @@
                 $( '#cfg-color-fondo-hex' ).text( configNumerosPage.colorFondo );
                 $( '#cfg-opacidad' ).val( Math.round( configNumerosPage.opacidadFondo * 100 ) );
                 $( '#cfg-opacidad-val' ).text( Math.round( configNumerosPage.opacidadFondo * 100 ) );
+                $( '#cfg-mostrar-fondo' ).prop( 'checked', configNumerosPage.mostrarFondo );
+                $( '#cfg-fondo-controles' ).toggle( configNumerosPage.mostrarFondo );
                 $( '#cfg-posicion' ).val( configNumerosPage.posicion );
                 $( '#cfg-tamanio' ).val( configNumerosPage.tamanio );
                 $( '#cfg-tamanio-val' ).text( configNumerosPage.tamanio );
+                $( '#cfg-num-x' ).val( configNumerosPage.customX );
+                $( '#cfg-num-y' ).val( configNumerosPage.customY );
+                $( '#cfg-pos-custom' ).toggle( configNumerosPage.posicion === 'personalizada' );
 
                 // Re-renderizar para mostrar el número con la config cargada
                 if ( estado.pdfDoc ) renderizarPagina( estado.paginaActual );

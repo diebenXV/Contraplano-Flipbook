@@ -380,6 +380,23 @@
 }
 .btn-peligro:hover { background: #fecaca; }
 
+/* Botones de acción de overlay (editar, copiar, eliminar) */
+.btn-accion-ov {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #334155;
+    cursor: pointer;
+    transition: background .15s;
+    text-align: center;
+}
+.btn-accion-ov:hover { background: #e2e8f0; }
+.btn-accion-ov-danger { border-color: #fca5a5; color: #dc2626; background: #fee2e2; }
+.btn-accion-ov-danger:hover { background: #fecaca; }
+
 /* ── Canvas ── */
 .area-canvas {
     flex: 1;
@@ -497,17 +514,17 @@
 /* Overlay Audio */
 .ov-audio-container {
     width: 100%; height: 100%;
-    display: flex; align-items: center; justify-content: center;
+    display: block;
 }
 .ov-audio-btn {
     width: 100%; height: 100%;
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 4px;
+    display: block;
+    border-radius: 0;
     cursor: pointer;
     transition: background .15s, border-color .15s;
 }
-.ov-audio-btn:hover  { background: rgba(0,0,0,.15) !important; border-color: rgba(255,255,255,.8) !important; }
-.ov-audio-btn.activo { background: rgba(0,0,0,.25) !important; border-color: rgba(255,255,255,.95) !important; }
+.ov-audio-btn:hover  { background: rgba(0,0,0,.15) !important; }
+.ov-audio-btn.activo { background: rgba(0,0,0,.25) !important; }
 
 /* ============================================================
    MODALES
@@ -633,58 +650,88 @@
 /* ── Slider de preview en modal presentación ── */
 .slides-preview-header { font-size: 12px; color: #6b7280; text-align: center; margin-bottom: 6px; }
 
-.slides-slider-wrap {
+/* ── Lista de diapositivas con drag & drop ── */
+.slides-sortable-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.slide-list-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    padding: 6px 8px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    transition: box-shadow .15s, opacity .15s;
+}
+.slide-list-item:hover {
+    box-shadow: 0 1px 4px rgba(0,0,0,.1);
+}
+.slide-list-item.dragging {
+    opacity: 0.5;
+    box-shadow: 0 4px 12px rgba(0,0,0,.2);
 }
 
-.slide-viewport {
-    flex: 1;
-    overflow: hidden;
-    border-radius: 8px;
-    background: #f1f5f9;
-    height: 160px;
-    position: relative;
+.slide-drag-handle {
+    cursor: grab;
+    font-size: 16px;
+    color: #94a3b8;
+    padding: 2px 4px;
+    user-select: none;
+    flex-shrink: 0;
 }
+.slide-drag-handle:active { cursor: grabbing; }
 
-#slides-track {
-    position: relative; width: 100%; height: 100%;
-}
-
-.slide-item {
-    position: absolute; inset: 0;
+.slide-list-thumb {
+    width: 80px;
+    height: 50px;
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
-    opacity: 0;
-    transition: opacity .3s;
-    border-radius: 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    border: 1px solid #e2e8f0;
 }
-.slide-item.activo { opacity: 1; }
 
-.slide-nav-btn {
-    width: 32px; height: 32px; flex-shrink: 0;
-    background: #1a3a5c; color: #fff;
-    border: none; border-radius: 50%;
-    cursor: pointer; font-size: 18px;
-    display: flex; align-items: center; justify-content: center;
+.slide-list-info {
+    flex: 1;
+    font-size: 13px;
+    color: #475569;
+    line-height: 1.3;
+}
+.slide-list-peso {
+    font-size: 11px;
+    color: #94a3b8;
+    margin-top: 2px;
+}
+
+.slide-list-delete {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: #ef4444;
+    padding: 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
     transition: background .15s;
 }
-.slide-nav-btn:hover { background: #2d6a9f; }
-
-.slides-dots {
-    display: flex; justify-content: center; gap: 6px; margin-top: 8px;
+.slide-list-delete:hover {
+    background: #fef2f2;
 }
-.slide-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: #d1d5db;
-    cursor: pointer;
-    transition: background .2s, transform .2s;
-}
-.slide-dot.activo { background: #1a6fcf; transform: scale(1.3); }
 
+.slide-list-placeholder {
+    height: 62px;
+    border: 2px dashed #cbd5e1;
+    border-radius: 6px;
+    background: #f1f5f9;
+}
 .dos-columnas { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 /* ── Audio preview en modal ── */
@@ -792,6 +839,43 @@
 }
 .toggle input:checked + .toggle-slider              { background: #1cbfb8; }
 .toggle input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+/* Toggle switch estilo iOS para sidebar */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+.toggle-slider-ui {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: #cbd5e1;
+    border-radius: 24px;
+    transition: background .2s;
+}
+.toggle-slider-ui::before {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    left: 3px;
+    top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+.toggle-switch input:checked + .toggle-slider-ui { background: #1cbfb8; }
+.toggle-switch input:checked + .toggle-slider-ui::before { transform: translateX(20px); }
 
 /* Modal pie */
 .modal-pie {
